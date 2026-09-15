@@ -1,0 +1,12 @@
+# 依赖与构建产物均由 Docker 多阶段构建内部生成，无需进入构建上下文
+**/node_modules
+**/dist
+**/data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+.git
+.gitignore
+docker-compose.yml
+README.md
+SPEC.md

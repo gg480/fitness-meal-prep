@@ -1,0 +1,12 @@
+# NAS 部署参考：拉取镜像一键运行
+# 使用方法：在 NAS 上创建目录 mealprep/，放入本文件，执行 docker compose up -d
+# 首次启动自动建库并写入种子食材库与默认配方"一锅出"
+services:
+  mealprep:
+    image: lrunningmjgoat/fitness-meal-prep:latest
+    container_name: mealprep
+    restart: unless-stopped
+    ports:
+      - "3830:3000"   # 浏览器访问 http://NAS_IP:3830
+    volumes:
+      - ./data:/app/data   # SQLite 数据持久化
