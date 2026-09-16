@@ -17,7 +17,12 @@ RUN npm ci --omit=dev
 
 # ---- 阶段3：运行时 ----
 FROM node:22-alpine
+# tzdata 是 TZ 环境变量生效的前提：alpine 默认不带时区库，
+# 缺了它批次时间戳（in_at）会按 UTC 显示，与本地差 8 小时
+RUN apk add --no-cache tzdata
+# 容器默认 UTC：批次时间戳等展示型时间会差 8 小时，固定上海时区
 ENV NODE_ENV=production \
+    TZ=Asia/Shanghai \
     DATA_DIR=/app/data \
     PORT=3000
 WORKDIR /app

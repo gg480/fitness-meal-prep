@@ -11,10 +11,13 @@ router.get('/', wrap((req, res) => {
 }));
 
 // 当日体重 upsert：同日多次称重只保留最后一次（date 主键冲突即覆盖）
+// date 必须由前端传入：容器为 UTC 时区，服务端自己算"今天"会差一天，
+// 业务日期必须以用户浏览器的日历为准；未传时才回退服务端日期（兼容旧调用）
 router.post('/', wrap((req, res) => {
-  const kg = Number((req.body || {}).kg);
+  const body = req.body || {};
+  const kg = Number(body.kg);
   if (!Number.isFinite(kg) || kg <= 0) throw new HttpError(400, 'kg 必须为正数');
-  const date = todayKey();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : todayKey();
   db.prepare(`
     INSERT INTO weights (date, kg) VALUES (?, ?)
     ON CONFLICT(date) DO UPDATE SET kg = excluded.kg

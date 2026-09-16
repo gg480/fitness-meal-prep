@@ -2,6 +2,7 @@
  * 页面只认本层方法名（与原型 api.js 同名）；后端字段 → 原型食物形状在此统一转换
  */
 import { DEFAULT_PORTIONS } from './constants';
+import { dateKey } from './utils';
 
 const BASE = '/api';
 
@@ -109,8 +110,9 @@ export async function fetchWeights() {
   return list.map(w => ({ d: w.date, kg: w.kg }));
 }
 
-export async function addWeight(kg) {
-  await req('POST', '/weights', { kg });
+export async function addWeight(kg, date) {
+  // 必须把浏览器的"今天"传给后端：容器跑 UTC，服务端日期会比本地晚一天
+  await req('POST', '/weights', { kg, date: date || dateKey() });
   return fetchWeights();
 }
 

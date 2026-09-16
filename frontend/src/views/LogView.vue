@@ -4,7 +4,7 @@ import { computed, ref } from 'vue';
 import { store } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { maAt } from '../utils';
+import { maAt, dateKey } from '../utils';
 import RuleCard from '../components/RuleCard.vue';
 
 const weightInput = ref('');
@@ -29,6 +29,10 @@ function renderChart(ws) {
   }
   g += '<polyline class="cd" fill="none" points="' +
     ws.map((w, i) => x(i) + ',' + y(w.kg)).join(' ') + '"/>';
+  // 每个数据点画实心圆：只有 1 条记录时 polyline 无法成线，圆点保证单点也可见
+  ws.forEach((w, i) => {
+    g += '<circle class="cd-dot" cx="' + x(i) + '" cy="' + y(w.kg) + '" r="3"/>';
+  });
   const maPts = ma.map((v, i) => (v == null ? null : x(i) + ',' + y(v))).filter(Boolean);
   if (maPts.length > 1) {
     g += '<polyline class="cm" fill="none" points="' + maPts.join(' ') + '"/>';
@@ -51,7 +55,7 @@ async function addWeight() {
   const kg = parseFloat(weightInput.value);
   if (!kg || kg < 30 || kg > 200) { toast('请输入 30–200 之间的体重'); return; }
   try {
-    store.weights = await api.addWeight(kg);
+    store.weights = await api.addWeight(kg, dateKey());
     weightInput.value = '';
     toast('已记录 ' + kg + ' kg，规则引擎已重新评估');
   } catch (err) {

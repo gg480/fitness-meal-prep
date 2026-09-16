@@ -790,6 +790,8 @@ button { font: inherit; color: inherit; }
 .cg { stroke: var(--track); stroke-width: 1; }
 .cl { fill: var(--text-faint); font-size: 10px; font-family: var(--mono); }
 .cd { stroke: #B9C4BC; stroke-width: 1.5; }
+/* 数据点圆点：与每日细线同色，单点记录时也能看到位置 */
+.cd-dot { fill: #B9C4BC; }
 .cm { stroke: var(--primary); stroke-width: 3; stroke-linecap: round; }
 
 .w-input { display: flex; align-items: center; gap: 10px; }
