@@ -84,14 +84,14 @@ function again() {
   store.cookPhase = 'weigh';
 }
 
-/* 清空重选：工作区配方清空并落库（与原型行为一致） */
-async function fresh() {
-  store.recipe = { id: store.recipe.id, name: '', portions: 6, items: {}, locked: [] };
+/* 清空重选：工作区脱离配方库（id 置空）重新开始，不落库。
+ * 旧实现把空配方存回服务端，等于静默抹掉原配方内容（v2.3 数据丢失事故同源，一并修复） */
+function fresh() {
+  store.recipe = { id: null, name: '', portions: 6, items: {}, locked: [] };
   store.weigh = {};
   store.cookPhase = 'weigh';
-  try { await api.saveRecipe(store.recipe); } catch (err) { /* 重置失败不阻断本地状态 */ }
   store.page = 'recipe';
-  toast('已清空，重新勾选食材');
+  toast('已清空重新开始（原配方未改动）');
 }
 
 const goRecipe = () => { store.page = 'recipe'; window.scrollTo(0, 0); };

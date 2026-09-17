@@ -55,14 +55,35 @@ export async function fetchRecipes() {
   return req('GET', '/recipes');
 }
 
-/* 保存当前工作配方：有 id 走更新，否则新建；成功后把指针指向它 */
-export async function saveRecipe(recipe) {
-  const body = { name: recipe.name || '', portions: recipe.portions, items: recipe.items };
-  const saved = recipe.id
-    ? await req('PUT', '/recipes/' + recipe.id, body)
-    : await req('POST', '/recipes', body);
+/* 配方体归一化：locked 必须随配方一起收发。
+ * 早期版本漏传 locked，新建配方会丢掉锁定状态（SPEC R4 要求收发均带该数组） */
+function recipeBody(recipe) {
+  return {
+    name: recipe.name || '',
+    portions: recipe.portions,
+    items: recipe.items,
+    locked: recipe.locked || []
+  };
+}
+
+/* 更新已有配方（PUT）并把当前指针指向它 */
+export async function updateRecipe(id, recipe) {
+  const saved = await req('PUT', '/recipes/' + id, recipeBody(recipe));
   await req('PUT', '/settings', { current_recipe_id: saved.id });
   return saved;
+}
+
+/* 新建配方（POST）：绝不覆盖任何已有条目，「另存为」的专用入口 */
+export async function createRecipe(recipe) {
+  const saved = await req('POST', '/recipes', recipeBody(recipe));
+  await req('PUT', '/settings', { current_recipe_id: saved.id });
+  return saved;
+}
+
+/* 保存工作区：已绑定库条目则更新那条，未绑定才新建。
+ * 用 id 显式区分二者——曾因"永远走 PUT"导致存新配方覆盖掉旧配方（v2.3 修复） */
+export async function saveRecipe(recipe) {
+  return recipe.id ? updateRecipe(recipe.id, recipe) : createRecipe(recipe);
 }
 
 export async function deleteRecipe(id) {

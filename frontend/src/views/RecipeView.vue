@@ -156,19 +156,44 @@ async function refreshRecipes() {
   try { store.recipes = await api.fetchRecipes(); } catch (err) { toast(err.message); }
 }
 
-/* 保存当前配方到库（REST：更新或新建，并更新指针） */
+/* 当前绑定条目的库名，用于「存配方」按钮标出将覆盖哪条（未绑定则为空） */
+const boundName = computed(() => {
+  if (!store.recipe.id) return '';
+  const r = recipeLib.value.find(x => x.id === store.recipe.id);
+  return r ? r.name : '';
+});
+
+/* 存配方：已绑定库条目 → 更新那条；未绑定（新工作区/刚清空）→ 新建一条 */
 async function saveRecipeToLib() {
   if (!Object.keys(store.recipe.items).length) { toast('请先勾选食材'); return; }
   const name = recipeName.value.trim() || autoRecipeName(store.recipe.items, store.foods);
+  const isUpdate = !!store.recipe.id;
   try {
     const saved = await api.saveRecipe(Object.assign({}, store.recipe, { name }));
     store.recipe.name = name;
     store.recipe.id = saved.id;
     recipeName.value = name;
     await refreshRecipes();
-    toast('配方「' + name + '」已保存' + (previewState.value.worst === 'bad' ? '（带红色徽标）' : ''));
+    toast('配方「' + name + '」已' + (isUpdate ? '更新' : '保存') +
+      (previewState.value.worst === 'bad' ? '（带红色徽标）' : ''));
   } catch (err) {
     toast('保存失败：' + err.message);
+  }
+}
+
+/* 另存为：强制新建一条，原配方保持不动（id 置空走 POST） */
+async function saveAsNew() {
+  if (!Object.keys(store.recipe.items).length) { toast('请先勾选食材'); return; }
+  const name = recipeName.value.trim() || autoRecipeName(store.recipe.items, store.foods);
+  try {
+    const saved = await api.createRecipe(Object.assign({}, store.recipe, { name, id: null }));
+    store.recipe.id = saved.id;
+    store.recipe.name = name;
+    recipeName.value = name;
+    await refreshRecipes();
+    toast('已另存为新配方「' + name + '」，原配方未改动');
+  } catch (err) {
+    toast('另存失败：' + err.message);
   }
 }
 
@@ -222,7 +247,12 @@ async function goCook() {
   pruneWeigh();
   if (!store.recipe.name) store.recipe.name = autoRecipeName(store.recipe.items, store.foods);
   recipeName.value = store.recipe.name;
-  try { await api.saveRecipe(store.recipe); await refreshRecipes(); } catch (err) { /* 保存失败不阻断进入厨房 */ }
+  try {
+    // 必须回写返回的 id：工作区未绑定时这里新建了条目，不回写会在下次进厨房时重复建条
+    const saved = await api.saveRecipe(store.recipe);
+    store.recipe.id = saved.id;
+    await refreshRecipes();
+  } catch (err) { /* 保存失败不阻断进入厨房 */ }
   store.cookPhase = 'weigh';
   store.page = 'cook';
   window.scrollTo(0, 0);
@@ -232,8 +262,9 @@ async function goCook() {
 <template>
   <section class="compose">
     <div class="food-side">
-      <RecipeLibBar :name="recipeName" :recipes="recipeLib" :current-id="store.recipe.id"
-        @update:name="recipeName = $event" @save="saveRecipeToLib" @load="loadRecipe" @delete="deleteRecipeFromLib" />
+      <RecipeLibBar :name="recipeName" :recipes="recipeLib" :current-id="store.recipe.id" :bound-name="boundName"
+        @update:name="recipeName = $event" @save="saveRecipeToLib" @save-as="saveAsNew"
+        @load="loadRecipe" @delete="deleteRecipeFromLib" />
 
       <div class="tabs">
         <button v-for="c in CATS" :key="c.key" class="tab" type="button"
