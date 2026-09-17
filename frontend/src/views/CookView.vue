@@ -54,7 +54,7 @@ function toPack() {
   store.cookPhase = 'pack';
 }
 
-/* 批次登记：POST inventory（含每份 kcal/P/C/F），成功跳 done */
+/* 批次登记：POST inventory（含每份 kcal/P/C/F + 整锅食材克重快照），成功跳 done */
 async function registerBatch() {
   if (registering.value) return;
   registering.value = true;
@@ -64,7 +64,8 @@ async function registerBatch() {
       name: batchName(store.recipe, store.foods),
       portions: store.packPortions,
       perKcal: Math.round(per.kcal), perP: round1(per.p),
-      perC: round1(per.c), perF: round1(per.f)
+      perC: round1(per.c), perF: round1(per.f),
+      items: { ...store.recipe.items }   // 锅位队列要展示"这锅里有什么"，随批次冻结
     });
     store.inventory = res.inventory;
     store.lastBatchId = res.batch.id;

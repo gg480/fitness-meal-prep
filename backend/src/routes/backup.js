@@ -14,10 +14,13 @@ function exportData() {
     settings: readAllSettings(),
     inventory: db.prepare('SELECT * FROM inventory ORDER BY rowid DESC').all()
       .map((r) => ({ id: r.id, name: r.name, portions: r.portions, inAt: r.in_at,
-        perKcal: r.per_kcal, perP: r.per_p, perC: r.per_c, perF: r.per_f })),
+        perKcal: r.per_kcal, perP: r.per_p, perC: r.per_c, perF: r.per_f,
+        items: r.items ? JSON.parse(r.items) : null })),
     day_logs: Object.fromEntries(
       db.prepare('SELECT * FROM day_logs ORDER BY date').all()
-        .map((r) => [r.date, { meals: r.meals, whey: r.whey, breakfast: r.breakfast, late: r.late, consumed: r.consumed }])
+        .map((r) => [r.date, { meals: r.meals, whey: r.whey, breakfast: r.breakfast, late: r.late,
+          consumed: r.consumed, perSnap: r.per_snap, batchName: r.batch_name,
+          mealsLog: r.meals_log, satiety: r.satiety }])
     ),
     weights: db.prepare('SELECT date, kg FROM weights ORDER BY date ASC').all(),
     rule_state: (() => {
@@ -49,14 +52,25 @@ function importWriters(data) {
       for (const [key, value] of Object.entries(data.settings)) ins.run(key, JSON.stringify(value));
     },
     inventory: () => {
-      const ins = db.prepare(`INSERT INTO inventory (id, name, portions, in_at, per_kcal, per_p, per_c, per_f)
-        VALUES (@id, @name, @portions, @inAt, @perKcal, @perP, @perC, @perF)`);
-      for (const b of data.inventory) ins.run(b);
+      const ins = db.prepare(`INSERT INTO inventory (id, name, portions, in_at, per_kcal, per_p, per_c, per_f, items)
+        VALUES (@id, @name, @portions, @inAt, @perKcal, @perP, @perC, @perF, @items)`);
+      for (const b of data.inventory) {
+        // 旧备份无 items 键 → 存 null，锅位队列对该批次不展示食材明细
+        ins.run({ ...b, items: b.items ? JSON.stringify(b.items) : null });
+      }
     },
     day_logs: () => {
-      const ins = db.prepare('INSERT INTO day_logs (date, meals, whey, breakfast, late, consumed) VALUES (?, ?, ?, ?, ?, ?)');
+      const ins = db.prepare(`INSERT INTO day_logs
+        (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const [date, log] of Object.entries(data.day_logs)) {
-        ins.run(date, log.meals, log.whey, log.breakfast, log.late, log.consumed);
+        // 快照/事件流兼容三种来源：v2.2 备份（原文本）、手工编辑（对象）、旧备份（缺键）
+        const snap = log.perSnap == null ? null
+          : (typeof log.perSnap === 'string' ? log.perSnap : JSON.stringify(log.perSnap));
+        const mlog = log.mealsLog == null ? null
+          : (typeof log.mealsLog === 'string' ? log.mealsLog : JSON.stringify(log.mealsLog));
+        ins.run(date, log.meals, log.whey, log.breakfast, log.late, log.consumed,
+          snap, log.batchName || '', mlog, log.satiety || 0);
       }
     },
     weights: () => {

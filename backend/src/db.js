@@ -37,7 +37,8 @@ db.exec(`
     name TEXT NOT NULL,
     portions REAL NOT NULL,
     in_at TEXT NOT NULL,            -- 'MM-DD HH:mm'
-    per_kcal REAL NOT NULL, per_p REAL NOT NULL, per_c REAL NOT NULL, per_f REAL NOT NULL
+    per_kcal REAL NOT NULL, per_p REAL NOT NULL, per_c REAL NOT NULL, per_f REAL NOT NULL,
+    items TEXT                      -- v2.2: 整锅食材克重 JSON {"rice":510,...}，锅位队列展示用
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -53,7 +54,9 @@ db.exec(`
     late TEXT NOT NULL,             -- 同上，晚加餐条目数组
     consumed REAL NOT NULL,         -- 已从库存扣减份数（FIFO 已消耗）
     per_snap TEXT,                  -- 打卡时每份营养快照 JSON {kcal,p,c,f}（批次吃完回溯不失真）
-    batch_name TEXT                 -- 打卡时批次名，供回溯卡片展示
+    batch_name TEXT,                -- 打卡时批次名，供回溯卡片展示
+    meals_log TEXT,                 -- v2.2: 核销事件流 JSON [{ts,batchId,batchName,per:{kcal,p,c,f}}]
+    satiety INTEGER NOT NULL DEFAULT 0  -- v2.2: 当日饱腹感 0=未记录，1-5 星
   );
 
   CREATE TABLE IF NOT EXISTS weights (
@@ -68,13 +71,24 @@ db.exec(`
   );
 `);
 
-// 轻量迁移：老库 day_logs 缺 per_snap/batch_name 列时补建（CREATE TABLE IF NOT EXISTS 不会改已存在表）
+// 轻量迁移：老库 day_logs 缺 per_snap/batch_name/meals_log/satiety 列时补建
+// （CREATE TABLE IF NOT EXISTS 不会改已存在表）；旧数据 meals_log 为 NULL，
+// 前端 normDaylog 兜底空数组并按 per_snap 旧口径回溯展示
 function migrateDayLogsColumns() {
   const cols = db.prepare('PRAGMA table_info(day_logs)').all().map(c => c.name);
   if (!cols.includes('per_snap')) db.exec('ALTER TABLE day_logs ADD COLUMN per_snap TEXT');
   if (!cols.includes('batch_name')) db.exec('ALTER TABLE day_logs ADD COLUMN batch_name TEXT');
+  if (!cols.includes('meals_log')) db.exec('ALTER TABLE day_logs ADD COLUMN meals_log TEXT');
+  if (!cols.includes('satiety')) db.exec("ALTER TABLE day_logs ADD COLUMN satiety INTEGER NOT NULL DEFAULT 0");
 }
 migrateDayLogsColumns();
+
+// 老库 inventory 缺 items 列时补建；旧批次无食材明细，锅位队列只显示营养不显示食材
+function migrateInventoryColumns() {
+  const cols = db.prepare('PRAGMA table_info(inventory)').all().map(c => c.name);
+  if (!cols.includes('items')) db.exec('ALTER TABLE inventory ADD COLUMN items TEXT');
+}
+migrateInventoryColumns();
 
 // 老库 recipes 缺 locked 列时补建（CREATE TABLE IF NOT EXISTS 不会改已存在表）；
 // 未命中锁定的旧配方默认空数组 = 全部可变，符合 R4 语义

@@ -1,6 +1,12 @@
-# 一锅出 · 备餐管理器 — 技术规格 SPEC v2.1
+# 一锅出 · 备餐管理器 — 技术规格 SPEC v2.2
 
-> 本文件是前后端开发的唯一契约。v2 依据更新后的 PRD（五页架构：今日/配方/做饭/记录/设置）；v2.1 在 v2 基础上落地五项实施顾问需求。
+> 本文件是前后端开发的唯一契约。v2 依据更新后的 PRD（五页架构：今日/配方/做饭/记录/设置）；v2.1 在 v2 基础上落地五项实施顾问需求；v2.2 落地「锅位可视化 + 事件化核销 + 成就感体系」。
+
+> ## v2.2 变更摘要
+> - **R6（事件化核销）**：正餐核销改为「事件式」——每次核销 1 份走 FIFO 扣库存并返回实扣明细（每份来自哪个批次 + 营养），逐份追加进 `day_logs.meals_log`（`[{ts,batchId,batchName,per:{kcal,p,c,f}}]`）。每份营养锁定在核销时刻，不再「整体重拍快照」，修复连点双扣与口径错位。
+> - **R7（锅位队列）**：今日页正餐卡改为「先入先吃」锅位队列，队首高亮、显示剩余份数与食材摘要（依赖 `inventory.items` 冻结整锅食材克重）。
+> - **R8（成就感体系）**：今日页新增连续打卡 streak 🔥 徽章、今日 kcal 进度环、清锅彩蛋（某锅扣到 0 份时提示「锅X见底，吃了N天」）、饱腹感 1-5 录入（`day_logs.satiety`）；记录页新增历史锅位回溯、碳蛋脂供能比条、达标天数统计（|kcal−目标|≤10%）。
+> - **数据模型**：`inventory` 加 `items TEXT`（整锅食材克重 JSON）；`day_logs` 加 `meals_log TEXT`、`satiety INTEGER`；backup 导出/导入补齐 `per_snap/batch_name/meals_log/satiety/items`。
 
 > ## v2.1 变更摘要
 > - **R3（加项口径）**：默认加项改为仅**蛋白粉 2 勺**（`229.8 kcal / P48 / C4.2 / F3.0`），`addonsOn` 默认 `true`；红薯不再计入默认加项，改为今日页晚加餐手动勾选；`DEFAULT_TODAY` 归零（`meals:0, whey:0, late:[]`），`normDaylog` 兜底同步。
@@ -60,7 +66,8 @@ CREATE TABLE inventory (
   name TEXT NOT NULL,
   portions REAL NOT NULL,
   in_at TEXT NOT NULL,            -- 'MM-DD HH:mm'
-  per_kcal REAL NOT NULL, per_p REAL NOT NULL, per_c REAL NOT NULL, per_f REAL NOT NULL
+  per_kcal REAL NOT NULL, per_p REAL NOT NULL, per_c REAL NOT NULL, per_f REAL NOT NULL,
+  items TEXT                      -- v2.2: 整锅食材克重 JSON {"rice":510,...}，锅位队列展示用
 );
 ```
 
@@ -77,9 +84,13 @@ CREATE TABLE day_logs (
   date TEXT PRIMARY KEY,          -- 'YYYY-MM-DD'
   meals INTEGER NOT NULL,         -- 正餐份数 0-4
   whey INTEGER NOT NULL,          -- 蛋白粉勺数 0-6
-  breakfast TEXT NOT NULL,        -- 选项 id：'none'|'egg_milk'|'sweet150'|'oat_milk'
-  late TEXT NOT NULL,             -- 'none'|'sweet200'|'whey1'
-  consumed REAL NOT NULL          -- 已从库存扣减份数（FIFO 已消耗）
+  breakfast TEXT NOT NULL,        -- 加餐条目数组 JSON [{"id","g"}]（旧值字符串 id 由前端归一化）
+  late TEXT NOT NULL,             -- 同上，晚加餐条目数组
+  consumed REAL NOT NULL,         -- 已从库存扣减份数（FIFO 已消耗）
+  per_snap TEXT,                  -- 打卡时每份营养快照 JSON {kcal,p,c,f}（旧口径兜底）
+  batch_name TEXT,                -- 打卡时批次名，供回溯卡片展示
+  meals_log TEXT,                 -- v2.2: 核销事件流 JSON [{ts,batchId,batchName,per:{kcal,p,c,f}}]
+  satiety INTEGER NOT NULL DEFAULT 0  -- v2.2: 当日饱腹感 1-5，0=未记录
 );
 ```
 
@@ -112,8 +123,8 @@ CREATE TABLE rule_state (
 | POST /api/recipes | 新建；PUT /api/recipes/:id 更新；DELETE /api/recipes/:id 删除 |
 | GET /api/settings | 对象形式（数值已反序列化）；PUT /api/settings 部分更新 |
 | GET /api/inventory | 库存列表（新→旧） |
-| POST /api/inventory | 批次登记 {name,portions,perKcal,perP,perC,perF}，服务端生成 id/in_at |
-| POST /api/inventory/consume | FIFO 扣减 {portions}，返回 {inventory,consumed,shortage} |
+| POST /api/inventory | 批次登记 {name,portions,perKcal,perP,perC,perF,items?}，服务端生成 id/in_at；items 为整锅食材克重 JSON |
+| POST /api/inventory/consume | FIFO 扣减 {portions}，返回 {inventory,consumed,shortage,detail}；detail=实扣明细 [{batchId,batchName,per}] |
 | GET /api/day-logs | 全量（dict 形式 `{"2026-09-16":{...}}`） |
 | PUT /api/day-logs/:date | upsert 当日打卡 |
 | GET /api/weights | 列表（按日期升序） |
@@ -131,6 +142,7 @@ CREATE TABLE rule_state (
 1. **今日（F5/F7）**：正餐步进 0-4、蛋白粉步进 0-6、早餐池（不吃/鸡蛋2个+牛奶250ml 300kcal P14C20F16/红薯150g/燕麦40g+牛奶250ml）、晚加餐池（不吃/红薯200g常态 122kcal/蛋白粉1勺 115kcal P24C2.1F1.5）、当日汇总 4 进度条+缺口读数、库存卡 FIFO 自动扣减（meals>consumed 时调 consume）、剩余≤2 份"该做饭了"提醒。每份营养参考：库存最新批次，无库存则当前配方每份。
    今日摄入 = per×meals + 勺×whey + 早餐 + 晚加餐（勺=114.9kcal P24 C2.1 F1.5）。
    **v2.1 R1 核销**：正餐卡新增「吃了 1 份 · 核销」主按钮 → meals+1 → 触发 consume 扣 1 份 → perSnap/落库；按钮上实时显示当前批次每份营养（取最近批次的 kcal）。步进器保留为修正工具（下调份数只改记录、不回补库存，加提示文案"下调仅改记录，库存不自动回补"）。核销为「事件式打卡」，打开页面默认 0 份（依赖 DEFAULT_TODAY 归零），不存在预填虚记。
+   **v2.2 R6/R7/R8 核销重构 + 成就感**：核销改为「一次一份、busy 防重入」的事件式链路——每次 `consume(1)` 取实扣明细 `detail`，逐份追加进 `meals_log`（每份营养锁定在核销时刻的批次），不再整体重拍快照（修复连点双扣与口径错位）。正餐卡改为「先入先吃」锅位队列（队首高亮 + 剩余份数 + 食材摘要 `items`）。页面头部新增 streak 🔥 徽章、今日 kcal 进度环（SVG 环形，达成度=摄入/目标）、饱腹感 1-5 星（再点同档取消）；某锅扣到 0 份时 toast「🎉 锅X见底，这一锅吃了N天」。
 2. **配方（F2/F3）**：搜索/分类筛选/自定义增删、自动搭配（算法见原型 verify-autogen.mjs：每餐目标=(目标−加项)/2，蔬菜均分150g、主食按剩余碳水、蛋白按剩余蛋白、油补脂肪缺口 5-15g；自然单位取整 NATURAL_UNITS）、每日预演红黄绿（|d|≤10% 绿 / ≤20% 黄 / >20% 红；红且未勾"我知道偏差"阻止保存）、缺口>900 提示过大、糙米替换 1/3 建议（配方含大米无糙米时）、配方库保存/载入/删除。
    加项（默认开）：**蛋白粉2勺 = 229.8kcal P48 C4.2 F3.0**（v2.1 R3 重定义，仅蛋白粉，无红薯）。
    **v2.1 R4 锁定**：已选食材行新增锁 toggle（🔒/🔓）；`autoGenerate` 改两阶段 —— 先对 `locked` 命中食材按现克数计入营养基数（克数不变），再对可变食材按扣除后的剩余目标分配；锁定蛋白已超目标时 toast 提示"锁定蛋白已近/超目标"，不产生负值。锁定状态随配方库持久化（`store.recipe.locked` ↔ recipes.locked，保存/载入都带）。做饭页称重清单对锁定食材标锁徽标。
@@ -145,6 +157,7 @@ CREATE TABLE rule_state (
    - 其余 → 目标区间（ok）
    - 均线=含当日的前7条均值；打卡率=近7天(含今日) meals>0 占比；忽略7天存 rule_state.ignored
    - 一键应用：调当前配方大米克重，重命名为「原名·调整版」并保存
+   **v2.2 历史饮食回溯增强**：每日回溯卡改为按 `meals_log` 聚合展示「吃了哪几锅各几份」（`summarizeMealsLog`），附碳蛋脂供能比条（`macroRatio`：蛋白 4/碳水 4/脂肪 9 kcal/g 折算占比）、饱腹感徽标（`satiety`）、以及头部「已达标 N/总天数」统计（达标 = |kcal−目标|≤10%，与 statusOf 绿档同口径）。旧数据（无 meals_log）回退按 `perSnap` 旧口径展示。
 5. **设置（F1）**：体重/身高/年龄/性别/活动系数(1.2/1.375/1.46/1.55/1.725/1.9)/目标缺口；实时计算链 Mifflin-St Jeor：BMR=10w+6.25h−5a+5(男)/−161(女)，TDEE=BMR×act（manualTdee 非空则覆盖），目标=TDEE−gap，P=w×proteinPer，F=目标×fatRatio%/9，C=(目标−4P−9F)/4；高级：蛋白系数/脂肪供能比。
    **v2.1 R5 目标速率**：新增「减重目标」区 —— 目标体重 targetWeight、周减速率 weeklyRate（0.25/0.5/0.75 kg/周三档）、复选框 weightTrack「TDEE 跟随最近体重记录」。weightTrack on 时计算链的 bodyweight 取 weights 最近一条；下方展示动态参考读数"建议缺口 = weeklyRate×7700÷7 ≈ {get 的 kcal} kcal"（0.25→275 / 0.5→550 / 0.75→825）。JSON 导出（GET /api/backup 下载）/导入（POST /api/backup）。
 

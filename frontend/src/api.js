@@ -84,9 +84,8 @@ export async function fetchInventory() {
 }
 
 export async function registerBatch(payload) {
-  const batch = await req('POST', '/inventory', payload);
-  const inventory = await req('GET', '/inventory');
-  return { batch, inventory };
+  // POST 响应已含 {batch, inventory}，无需再打一次 GET（少一次往返）
+  return req('POST', '/inventory', payload);
 }
 
 export async function consumePortions(n) {

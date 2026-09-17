@@ -6,7 +6,7 @@ import * as api from './api';
 import { toast } from './toast';
 import {
   calcProfile, calcTotals, perOf, dailyPreview as dailyOf,
-  deviOf, statusOf, worseOf, dateKey, normDaylog, dayIntake
+  deviOf, statusOf, worseOf, dateKey, normDaylog, dayIntake, calcStreak
 } from './utils';
 import { DEFAULT_PORTIONS, SETTINGS_FALLBACK, DEFAULT_TODAY } from './constants';
 
@@ -69,6 +69,12 @@ export const latestPer = computed(() => {
 export const todayIntake = computed(() =>
   dayIntake(store.today, store.today.perSnap || latestPer.value, store.foods));
 
+/* 锅位队列：库存按"先入先吃"排列（最旧在前）。今日页队首 = 当前正在吃的锅 */
+export const fifoQueue = computed(() => [...store.inventory].reverse());
+
+/* 连续打卡天数（今日页 🔥 徽章）：今日尚未吃不打断历史（饭在晚上） */
+export const streak = computed(() => calcStreak(store.daylogs, dateKey()));
+
 /* 配方库：flagBad 由前端按当前 profile 动态校验（红黄绿属业务计算） */
 export const recipeLib = computed(() => store.recipes.map(r => {
   const per = perOf(calcTotals(r.items || {}, store.foods), r.portions || 1);
@@ -118,6 +124,11 @@ export async function initStore() {
       : { id: null, name: '', portions: DEFAULT_PORTIONS, items: {}, locked: [] };
     store.packPortions = store.recipe.portions;
     store.today = normDaylog(daylogs[dateKey()]);
+    // 旧数据事件流缺失：按快照补齐占位事件，保证 meals 与 mealsLog 一致（后续核销/下调走事件）
+    while (store.today.mealsLog.length < store.today.meals) {
+      const per = store.today.perSnap || latestPer.value;
+      store.today.mealsLog.push({ ts: 0, batchId: '', batchName: store.today.batchName || '历史批次', per });
+    }
     store.ready = true;
   } catch (err) {
     toast('数据加载失败，请刷新页面重试');

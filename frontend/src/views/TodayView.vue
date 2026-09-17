@@ -2,7 +2,7 @@
 /* 今日页（F5 打卡 + 二开机动加餐 + 本日体重 + F7 库存）：
  * 正餐/蛋白粉步进核销，早餐/晚加餐为快捷食材 chips 点选录克数 */
 import { computed, ref } from 'vue';
-import { store, profile, latestPer, todayIntake, foodById } from '../store';
+import { store, profile, latestPer, todayIntake, foodById, fifoQueue, streak } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
 import { dateKey, normExtras, sumExtras, addonNutri, naturalOf, qtyText } from '../utils';
@@ -16,10 +16,20 @@ const now = new Date();
 const todayLabel = (now.getMonth() + 1 + '').padStart(2, '0') + '-' +
   (now.getDate() + '').padStart(2, '0') + '（周' + weekCn[now.getDay()] + '）';
 
-/* 每份营养取最近批次；库存空时按当前工作配方估算（store.latestPer 已封） */
+/* 正餐份数钳制上限，与 Stepper max、后端 meals 0-4 校验一致 */
+const MEAL_MAX = 4;
 
 const invSum = computed(() => store.inventory.reduce((s, b) => s + b.portions, 0));
 const lowStock = computed(() => invSum.value > 0 && invSum.value <= 2);
+
+/* 队首锅 = FIFO 队列第一位（最旧、正在吃的锅）；核销按钮展示其每份营养 */
+const headPot = computed(() => fifoQueue.value[0] || null);
+
+/* 今日进度环：kcal 达成度钳 0-1，环满表示达标；SVG 圆周长 2πr=314.16 */
+const ringProgress = computed(() =>
+  Math.max(0, Math.min(1, todayIntake.value.kcal / profile.value.kcal)));
+const ringC = 2 * Math.PI * 50;
+const ringOffset = computed(() => ringC * (1 - ringProgress.value));
 
 /* 机动加餐：chips 一次累加一个自然单位，条目可改克数/删除 */
 const quickFoods = computed(() =>
@@ -60,45 +70,113 @@ function removeAddon(kind, i) {
   persistToday();
 }
 
-/* 打卡即时持久化：上调份数时 FIFO 扣库存；拍下每份营养快照与批次名供回溯 */
+/* 打卡持久化：仅存记录（核销扣库存已在 consumeOne 同步完成），不再触发 consume。
+ * mealsLog 深拷贝避免与 store.today 共享数组引用 */
 async function persistToday() {
   const t = store.today;
-  if (t.meals > t.consumed) {
-    try {
-      const res = await api.consumePortions(t.meals - t.consumed);
-      store.inventory = res.inventory;
-      t.consumed += res.consumed;
-      if (res.shortage > 0) toast('库存已空 ' + res.shortage + ' 份，按最近配方估算');
-    } catch (err) {
-      toast(err.message);
-    }
-  }
   const per = latestPer.value;
   t.perSnap = { kcal: per.kcal, p: per.p, c: per.c, f: per.f };
   t.batchName = store.inventory.length ? store.inventory[0].name : (per.name || '');
-  store.daylogs[dateKey()] = Object.assign({}, t);
+  store.daylogs[dateKey()] = Object.assign({}, t, {
+    mealsLog: [...t.mealsLog], breakfast: [...t.breakfast], late: [...t.late]
+  });
   try {
     await api.saveDayLog(dateKey(), t);
   } catch (err) { /* 打卡记录保存失败不阻断界面汇总 */ }
 }
 
-const touch = fn => { fn(); persistToday(); };
-
-/* 正餐份数钳制上限，与 Stepper max 一致 */
-const MEAL_MAX = 4;
-
-/* 核销一份饭：仅上调（≤4 禁用），复用 persistToday 的 FIFO 扣库存 + 快照落库链路 */
-function checkoffMeal() {
-  if (store.today.meals >= MEAL_MAX) return;
-  touch(() => { store.today.meals += 1; });
+/* 单份核销核心：FIFO 扣 1 份库存 → 实扣明细记为事件（每份营养/批次锁定在此刻）。
+ * 事件即份数真相，避免"整体重拍快照"导致的连点双扣与口径漂移 */
+async function consumeOne() {
+  const headBefore = headPot.value;
+  let res;
+  try {
+    res = await api.consumePortions(1);
+  } catch (err) {
+    toast(err.message);
+    return false;
+  }
+  store.inventory = res.inventory;
+  const details = res.detail && res.detail.length ? res.detail : null;
+  // 一份可能跨两锅（队首仅剩半份）：累加所有实扣明细的营养，记一个事件
+  const per = details
+    ? details.reduce((a, e) => ({
+        kcal: a.kcal + e.per.kcal, p: a.p + e.per.p, c: a.c + e.per.c, f: a.f + e.per.f
+      }), { kcal: 0, p: 0, c: 0, f: 0 })
+    : { kcal: latestPer.value.kcal, p: latestPer.value.p, c: latestPer.value.c, f: latestPer.value.f };
+  store.today.meals += 1;
+  store.today.consumed += res.consumed;
+  store.today.mealsLog.push({
+    ts: Date.now(),
+    batchId: details ? details[0].batchId : '',
+    batchName: details ? details[0].batchName : '配方估算',
+    per,
+  });
+  if (res.shortage > 0) toast('库存已空，本份按最近配方估算');
+  celebratePotEmpty(headBefore);
+  return true;
 }
 
-/* 步进器作为修正工具：上调走扣库存；下调只改记录，库存不自动回补（persistToday 本就不回补） */
-const setMeals = v => {
-  if (v < store.today.meals) toast('下调仅改记录，已扣库存不自动回补');
-  touch(() => { store.today.meals = Math.max(0, Math.min(MEAL_MAX, v)); });
-};
-const setWhey = v => touch(() => { store.today.whey = v; });
+/* 清锅彩蛋：核销前队首仅剩 ≤1 份且核销后已从库存移除 = 这一锅吃完了 */
+function celebratePotEmpty(headBefore) {
+  if (!headBefore) return;
+  const still = store.inventory.find(b => b.id === headBefore.id);
+  if (still || headBefore.portions > 1.0001) return;
+  const days = batchDaysEaten(headBefore.id);
+  toast('🎉 锅「' + headBefore.name + '」见底，这一锅吃了 ' + days + ' 天！');
+}
+
+/* 某锅跨越的天数 = 今天（已核销未落库）+ 历史 daylogs 中出现该 batchId 的天数 */
+function batchDaysEaten(batchId) {
+  let days = store.today.mealsLog.some(e => e.batchId === batchId) ? 1 : 0;
+  Object.entries(store.daylogs).forEach(([d, log]) => {
+    if (d === dateKey()) return;
+    if (log && Array.isArray(log.mealsLog) && log.mealsLog.some(e => e.batchId === batchId)) days++;
+  });
+  return days;
+}
+
+/* 核销按钮：一次一份，busy 防连点重入（修复双扣根因） */
+const checking = ref(false);
+async function checkoffMeal() {
+  if (checking.value || store.today.meals >= MEAL_MAX) return;
+  checking.value = true;
+  try {
+    if (await consumeOne()) await persistToday();
+  } finally {
+    checking.value = false;
+  }
+}
+
+/* 步进器上调：逐份走核销链路（与按钮同口径，库存与事件不脱节） */
+async function addMeals(n) {
+  if (checking.value) return;
+  checking.value = true;
+  try {
+    for (let i = 0; i < n && store.today.meals < MEAL_MAX; i++) await consumeOne();
+    await persistToday();
+  } finally {
+    checking.value = false;
+  }
+}
+
+/* 步进器作为修正工具：下调只改记录、库存不回补，同步裁剪事件流保持份数一致 */
+function setMeals(v) {
+  v = Math.max(0, Math.min(MEAL_MAX, v));
+  if (v === store.today.meals) return;
+  if (v > store.today.meals) { addMeals(v - store.today.meals); return; }
+  toast('下调仅改记录，已扣库存不自动回补');
+  store.today.meals = v;
+  store.today.mealsLog.splice(v);
+  persistToday();
+}
+const setWhey = v => { store.today.whey = Math.max(0, Math.min(6, v)); persistToday(); };
+
+/* 饱腹感 1-5：再点同一档取消（0=未记录）；成就感体系的一环，驱动坚持 */
+function setSatiety(n) {
+  store.today.satiety = store.today.satiety === n ? 0 : n;
+  persistToday();
+}
 
 /* 本日体重：录入即更新体重曲线与规则引擎（与记录页共用存储） */
 const todayWeight = computed(() => {
@@ -120,6 +198,17 @@ async function addWeight() {
   }
 }
 
+/* 锅位食材摘要：取前 3 种「名称 克数」，items 缺失（老批次）返回空 */
+function itemsSummary(b) {
+  if (!b.items) return '';
+  const ids = Object.keys(b.items);
+  if (!ids.length) return '';
+  return ids.slice(0, 3).map(id => {
+    const f = foodById(id);
+    return (f ? f.name : id) + ' ' + Math.round(b.items[id]) + 'g';
+  }).join(' · ');
+}
+
 function goCook() {
   if (!Object.keys(store.recipe.items).length) {
     toast('请先在配方页组好配方');
@@ -133,7 +222,36 @@ function goCook() {
 
 <template>
   <section class="narrow">
-    <div class="sec-head">今日 · <span class="mono">{{ todayLabel }}</span></div>
+    <div class="sec-head">今日 · <span class="mono">{{ todayLabel }}</span>
+      <span class="streak-chip" v-if="streak">🔥 {{ streak }} 天</span>
+    </div>
+
+    <!-- 成就感卡：今日进度环 + 连续打卡 + 饱腹感 -->
+    <div class="card achieve-card">
+      <div class="achieve-ring">
+        <svg viewBox="0 0 120 120">
+          <circle class="ring-track" cx="60" cy="60" r="50" />
+          <circle class="ring-fill" cx="60" cy="60" r="50"
+            :stroke-dasharray="ringC" :stroke-dashoffset="ringOffset" />
+        </svg>
+        <div class="ring-center">
+          <b class="ring-kcal">{{ Math.round(todayIntake.kcal) }}</b>
+          <span class="ring-target">/ {{ profile.kcal }} kcal</span>
+        </div>
+      </div>
+      <div class="achieve-info">
+        <div class="streak-line">
+          <span class="streak-ic">🔥</span>
+          <b>{{ streak }}</b><span> 天连续打卡</span>
+        </div>
+        <div class="meals-line">今日正餐 <b class="mono">{{ store.today.meals }}</b>/{{ MEAL_MAX }} 份</div>
+        <div class="satiety">
+          <span class="sat-lab">饱腹感</span>
+          <button v-for="n in 5" :key="n" type="button" class="sat-star"
+            :class="{ on: store.today.satiety >= n }" @click="setSatiety(n)">★</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="lowStock" class="fifo">
       <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
@@ -141,19 +259,39 @@ function goCook() {
     </div>
 
     <div class="card">
-      <div class="card-title">正餐炒饭 <span class="sum-sub">每份 {{ Math.round(latestPer.kcal) }} kcal · 自动扣库存</span></div>
-      <div class="meal-row">
-        <Stepper :model-value="store.today.meals" :min="0" :max="4" @update:model-value="setMeals" />
-        <span class="st-hint">份（0–4）· 打卡自动扣库存</span>
-        <button class="btn primary" type="button"
-          :disabled="store.today.meals >= MEAL_MAX"
-          @click="checkoffMeal">🍚 吃了 1 份 · 核销</button>
-        <span class="st-hint">核销后 +{{ Math.round(latestPer.kcal) }} kcal</span>
-      </div>
+      <div class="card-title">正餐炒饭 <span class="sum-sub">先入先吃 · 队首即当前锅</span></div>
+
+      <!-- 锅位队列：每锅内容/份数/剩余，队首高亮 -->
+      <ul class="pot-queue">
+        <li v-if="!fifoQueue.length" class="pot-empty">库存空 · 核销将按最近配方估算</li>
+        <li v-for="(b, i) in fifoQueue" :key="b.id" class="pot-item" :class="{ head: i === 0 }">
+          <div class="pot-main">
+            <span class="pot-name">{{ b.name }}</span>
+            <span v-if="itemsSummary(b)" class="pot-items">{{ itemsSummary(b) }}</span>
+          </div>
+          <div class="pot-right">
+            <span class="pot-portions mono">{{ b.portions }}<i>份</i></span>
+            <span class="pot-kcal mono">{{ b.perKcal }} kcal/份</span>
+          </div>
+        </li>
+      </ul>
+
+      <button class="btn primary xl" type="button"
+        :disabled="checking || store.today.meals >= MEAL_MAX"
+        @click="checkoffMeal">
+        🍚 吃了 1 份 · 核销
+        <span v-if="headPot" class="btn-sub">+{{ Math.round(headPot.perKcal) }} kcal</span>
+      </button>
+
       <p class="checkoff" v-if="store.today.meals">
-        已核销 <b>{{ store.today.meals }}</b> 份 × {{ Math.round(latestPer.kcal) }} kcal ≈
-        {{ Math.round(latestPer.kcal * store.today.meals) }} kcal · {{ store.today.batchName || '最近批次' }}
+        已核销 <b>{{ store.today.meals }}</b>/{{ MEAL_MAX }} 份
+        <span v-if="headPot">· 当前吃「{{ headPot.name }}」</span>
       </p>
+
+      <div class="meal-row mt16">
+        <Stepper :model-value="store.today.meals" :min="0" :max="MEAL_MAX" @update:model-value="setMeals" />
+        <span class="st-hint">步进器为修正工具（下调不回补库存）</span>
+      </div>
     </div>
 
     <div class="card">

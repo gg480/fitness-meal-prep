@@ -4,7 +4,7 @@ import { computed, ref } from 'vue';
 import { store, profile, latestPer, foodById } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { maAt, dateKey, normDaylog, dayIntake, deviOf, statusOf, pctText, round1, qtyText, naturalOf } from '../utils';
+import { maAt, dateKey, normDaylog, dayIntake, deviOf, statusOf, pctText, round1, qtyText, naturalOf, summarizeMealsLog, macroRatio } from '../utils';
 import RuleCard from '../components/RuleCard.vue';
 
 const weightInput = ref('');
@@ -63,7 +63,8 @@ async function addWeight() {
   }
 }
 
-/* 每日饮食回溯：按天倒序卡片，展示正餐/蛋白粉/加餐摄入与目标对比（三餐打卡数据） */
+/* 每日饮食回溯：按天倒序卡片，展示正餐(哪几锅各几份)/蛋白粉/加餐摄入与目标对比，
+ * 附碳蛋脂供能比与达标判定（|kcal−目标|≤10% 记达标） */
 const weekCn = ['日', '一', '二', '三', '四', '五', '六'];
 const dietHistory = computed(() => Object.keys(store.daylogs)
   .sort((a, b) => b.localeCompare(a))
@@ -73,8 +74,14 @@ const dietHistory = computed(() => Object.keys(store.daylogs)
     const intake = dayIntake(log, per, store.foods);
     const dKcal = deviOf(intake.kcal, profile.value.kcal);
     const week = weekCn[new Date(d + 'T00:00:00').getDay()];
-    return { d, log, intake, dKcal, week };
+    const pots = summarizeMealsLog(log);
+    const ratio = macroRatio(intake);
+    return { d, log, intake, dKcal, week, pots, ratio };
   }));
+
+/* 达标天数：热量偏差 ≤10% 的天数（口径与 statusOf 绿档一致，见 PRD 表 3-1） */
+const achieveDays = computed(() =>
+  dietHistory.value.filter(h => Math.abs(h.dKcal) <= 0.10).length);
 
 /* 加餐条目文本：名称 + 克数（自然单位），如「鸡蛋 100g」 */
 function addonText(list) {
@@ -115,19 +122,31 @@ function addonText(list) {
       <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/></svg>
       <b>每日饮食回溯</b>
     </div>
-    <p class="t-note">按天查看实际吃下多少，热量徽标为当天摄入 vs 目标 {{ profile.kcal }} kcal 的偏差</p>
+    <p class="t-note">按天查看实际吃下多少，热量徽标为当天摄入 vs 目标 {{ profile.kcal }} kcal 的偏差 ·
+      已达标 <b class="mono">{{ achieveDays }}</b>/{{ dietHistory.length }} 天</p>
 
     <div v-if="!dietHistory.length" class="empty">
       <span>暂无打卡记录，去今日页完成每日打卡后这里会按天生成回溯卡片</span>
     </div>
     <div v-for="h in dietHistory" :key="h.d" class="history-card">
-      <div class="history-date mono">{{ h.d.slice(5) }}<i>周{{ h.week }}</i></div>
+      <div class="history-date mono">{{ h.d.slice(5) }}<i>周{{ h.week }}</i>
+        <span v-if="h.log.satiety" class="sat-tag">饱腹 {{ h.log.satiety }}/5</span>
+      </div>
       <div class="history-main">
-        <div class="history-item"><b>正餐</b><span>{{ h.log.meals }} 份{{ h.log.batchName ? ' · ' + h.log.batchName : '' }}</span></div>
+        <div v-for="p in h.pots" :key="p.batchName" class="history-item">
+          <b>🍚 {{ p.batchName }}</b><span>{{ p.count }} 份 · {{ Math.round(p.kcal) }} kcal</span>
+        </div>
+        <div v-if="!h.pots.length && h.log.meals" class="history-item"><b>正餐</b><span>{{ h.log.meals }} 份</span></div>
         <div class="history-item"><b>蛋白粉</b><span>{{ h.log.whey }} 勺</span></div>
         <div v-if="h.log.breakfast.length" class="history-item"><b>早餐</b><span>{{ addonText(h.log.breakfast) }}</span></div>
         <div v-if="h.log.late.length" class="history-item"><b>晚加餐</b><span>{{ addonText(h.log.late) }}</span></div>
       </div>
+      <div class="ratio-bar">
+        <i class="r-p" :style="{ width: (h.ratio.p * 100) + '%' }"></i>
+        <i class="r-c" :style="{ width: (h.ratio.c * 100) + '%' }"></i>
+        <i class="r-f" :style="{ width: (h.ratio.f * 100) + '%' }"></i>
+      </div>
+      <div class="ratio-legend mono">蛋白 {{ Math.round(h.ratio.p * 100) }}% · 碳水 {{ Math.round(h.ratio.c * 100) }}% · 脂肪 {{ Math.round(h.ratio.f * 100) }}%</div>
       <div class="history-nutri mono">
         <span class="bar-badge" :class="statusOf(h.dKcal)">{{ pctText(h.dKcal) }}</span>
         {{ Math.round(h.intake.kcal) }} / {{ profile.kcal }} kcal · P{{ round1(h.intake.p) }}

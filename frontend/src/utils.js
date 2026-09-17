@@ -268,10 +268,14 @@ export function normExtras(v) {
   return LEGACY_OPTIONS[v] || [];
 }
 
-/* 归一化某天打卡：补默认份数、快照字段，加餐字段走 normExtras */
+/* 归一化某天打卡：补默认份数、快照字段，加餐字段走 normExtras；
+ * mealsLog 过滤缺营养的坏条目（v2.2 前的旧数据为空数组，回溯走 perSnap 旧口径） */
 export function normDaylog(log) {
-  const t = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, perSnap: null, batchName: '' };
+  const t = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, perSnap: null, batchName: '', mealsLog: [], satiety: 0 };
   if (!log) return t;
+  const ml = Array.isArray(log.mealsLog)
+    ? log.mealsLog.filter(e => e && e.per && Number.isFinite(Number(e.per.kcal)))
+    : [];
   return {
     meals: log.meals || 0,
     whey: log.whey || 0,
@@ -280,6 +284,8 @@ export function normDaylog(log) {
     consumed: log.consumed || 0,
     perSnap: log.perSnap || null,
     batchName: log.batchName || '',
+    mealsLog: ml,
+    satiety: Number(log.satiety) || 0,
   };
 }
 
@@ -299,14 +305,67 @@ export function sumExtras(list, foods) {
   }, { kcal: 0, p: 0, c: 0, f: 0 });
 }
 
-/* 某天总摄入 = 正餐 + 蛋白粉 + 早餐 + 晚加餐；per 为当日每份营养快照 */
+/* 正餐营养：优先按核销事件逐份累计（每份营养锁定在核销时刻的批次，口径不漂移）；
+ * 事件数 < 份数的缺口（旧数据 / 手工上调）按 per 快照兜底补齐 */
+export function mealsNutri(log, per) {
+  const acc = { kcal: 0, p: 0, c: 0, f: 0 };
+  (log.mealsLog || []).forEach(e => {
+    acc.kcal += Number(e.per.kcal) || 0; acc.p += Number(e.per.p) || 0;
+    acc.c += Number(e.per.c) || 0; acc.f += Number(e.per.f) || 0;
+  });
+  const gap = (log.meals || 0) - (log.mealsLog || []).length;
+  if (gap > 0) {
+    acc.kcal += per.kcal * gap; acc.p += per.p * gap;
+    acc.c += per.c * gap; acc.f += per.f * gap;
+  }
+  return acc;
+}
+
+/* 某天总摄入 = 正餐 + 蛋白粉 + 早餐 + 晚加餐；per 为事件缺口的兜底口径（快照或配方估算） */
 export function dayIntake(log, per, foods) {
   const w = WHEY_SCOOP;
   const b = sumExtras(log.breakfast, foods), l = sumExtras(log.late, foods);
+  const m = mealsNutri(log, per);
   return {
-    kcal: per.kcal * log.meals + w.kcal * log.whey + b.kcal + l.kcal,
-    p: per.p * log.meals + w.p * log.whey + b.p + l.p,
-    c: per.c * log.meals + w.c * log.whey + b.c + l.c,
-    f: per.f * log.meals + w.f * log.whey + b.f + l.f,
+    kcal: m.kcal + w.kcal * log.whey + b.kcal + l.kcal,
+    p: m.p + w.p * log.whey + b.p + l.p,
+    c: m.c + w.c * log.whey + b.c + l.c,
+    f: m.f + w.f * log.whey + b.f + l.f,
   };
+}
+
+/* 核销事件按批次聚合（记录页回溯"吃了哪几锅各几份"）：
+ * 返回 [{batchName, count, kcal}]，按吃的先后排序 */
+export function summarizeMealsLog(log) {
+  const order = [];
+  const map = {};
+  (log.mealsLog || []).forEach(e => {
+    const key = e.batchName || '未命名锅';
+    if (!map[key]) { map[key] = { batchName: key, count: 0, kcal: 0 }; order.push(key); }
+    map[key].count += 1;
+    map[key].kcal += Number(e.per.kcal) || 0;
+  });
+  return order.map(k => map[k]);
+}
+
+/* 碳蛋脂供能比（0-1）：蛋白 4 / 碳水 4 / 脂肪 9 kcal/g，用于回溯卡配比条 */
+export function macroRatio(intake) {
+  const kp = intake.p * 4, kc = intake.c * 4, kf = intake.f * 9;
+  const total = kp + kc + kf;
+  if (total <= 0) return { p: 0, c: 0, f: 0 };
+  return { p: kp / total, c: kc / total, f: kf / total };
+}
+
+/* 连续打卡天数（成就感口径）：今天吃过则计入，今天还没吃不打断（晚上才吃），
+ * 往前一天 meals>0 连续累计，遇到没吃/无记录即停 */
+export function calcStreak(daylogs, todayKey) {
+  const hit = k => { const l = daylogs[k]; return !!(l && l.meals > 0); };
+  let streak = hit(todayKey) ? 1 : 0;
+  const d = new Date();
+  for (let i = 0; i < 3660; i++) {
+    d.setDate(d.getDate() - 1);
+    if (hit(dateKey(d))) streak++;
+    else break;
+  }
+  return streak;
 }
