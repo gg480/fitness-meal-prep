@@ -1,0 +1,8 @@
+{
+  "_说明": "复制本文件为 nas-config.json 并填入真实值。nas-config.json 已在 .gitignore 中，不会被提交。",
+  "host": "<NAS 局域网 IP，如 192.168.1.10>",
+  "ssh_port": 10000,
+  "user": "<NAS SSH 用户名>",
+  "repo": "<Docker Hub 仓库，如 yourname/fitness-meal-prep>",
+  "container": "<容器名>"
+}
