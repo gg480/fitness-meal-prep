@@ -622,6 +622,22 @@ button { font: inherit; color: inherit; }
 
 .addon-note { font-size: 11px; color: var(--text-faint); margin-top: 8px; }
 
+/* 达标建议块：加项是"打卡时需补"的建议值而非已摄入，用主色软底与普通注释区分开 */
+.addon-note.is-advise {
+  font-size: 12px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+.addon-note .advise-sub {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-sub);
+}
+
 .gap-row {
   display: flex;
   align-items: center;

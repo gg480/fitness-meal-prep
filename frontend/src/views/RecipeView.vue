@@ -142,13 +142,16 @@ function applyBrownRice() {
   toast('已把 1/3 大米替换为糙米（+' + brown + ' g）');
 }
 
-/* 缺口 > 900 kcal 时追加"建议常态加餐"提示 */
+/* 加项按「达标建议值」表述：预演把它计入，是为了校验配方克数是否匹配日目标；
+ * 它本质是打卡时需补的量——没在今日页记录，就不进当天摄入。
+ * 缺口 > 900 kcal 时追加"建议常态加餐"提示 */
 const addonNote = computed(() => {
   const gap = profile.value.tdee - previewState.value.daily.kcal;
   let note = store.addonsOn
-    ? '已计入加项：' + ADDONS.label + ' · ' + Math.round(ADDONS.kcal) + ' kcal'
-    : '未计加项（预演开关已关闭）';
-  if (gap > 900) note = '预演缺口 ' + Math.round(gap) + ' kcal 偏大，建议常态加餐 —— ' + note;
+    ? '达标建议：打卡时补' + ADDONS.label + '（' + Math.round(ADDONS.kcal) + ' kcal）'
+    : '未计入达标建议（开关已关闭），预演仅含正餐部分';
+  // 缺口提示追加在后，避免把"达标建议"这个主信息埋到句尾
+  if (gap > 900) note += '；预演缺口 ' + Math.round(gap) + ' kcal 偏大，建议常态加餐';
   return note;
 });
 
@@ -327,10 +330,11 @@ async function goCook() {
           <h3 class="sum-title">每日预演 <span class="sum-sub">午晚各 1 份</span></h3>
           <label class="addon-toggle">
             <input v-model="store.addonsOn" type="checkbox">
-            含默认加项（{{ ADDONS.label }}）
+            计入达标建议（{{ ADDONS.label }}）
           </label>
           <StatBars :intake="previewState.daily" :profile="profile" />
-          <p class="addon-note">{{ addonNote }}</p>
+          <p class="addon-note" :class="{ 'is-advise': store.addonsOn }">{{ addonNote }}<span
+            v-if="store.addonsOn" class="advise-sub">预演已按此计入；未在今日页打卡记上，当日不计入</span></p>
           <GapRow :intake="previewState.daily.kcal" :profile="profile" :is-today="false" />
           <div v-if="showBrown" class="brown-hint">
             <span>主食只勾了大米，可尝试糙米替换 1/3，渐进过渡杂粮</span>
