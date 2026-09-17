@@ -1,10 +1,10 @@
 <script setup>
-/* 记录页（F6）：体重录入、SVG 曲线（细线每日 + 粗线 7 日均线）、规则引擎卡 */
+/* 记录页（F6）：体重录入、SVG 曲线（细线每日 + 粗线 7 日均线）、规则引擎卡、每日饮食回溯 */
 import { computed, ref } from 'vue';
-import { store } from '../store';
+import { store, profile, latestPer, foodById } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { maAt, dateKey } from '../utils';
+import { maAt, dateKey, normDaylog, dayIntake, deviOf, statusOf, pctText, round1, qtyText, naturalOf } from '../utils';
 import RuleCard from '../components/RuleCard.vue';
 
 const weightInput = ref('');
@@ -62,6 +62,27 @@ async function addWeight() {
     toast(err.message);
   }
 }
+
+/* 每日饮食回溯：按天倒序卡片，展示正餐/蛋白粉/加餐摄入与目标对比（三餐打卡数据） */
+const weekCn = ['日', '一', '二', '三', '四', '五', '六'];
+const dietHistory = computed(() => Object.keys(store.daylogs)
+  .sort((a, b) => b.localeCompare(a))
+  .map(d => {
+    const log = normDaylog(store.daylogs[d]);
+    const per = log.perSnap || latestPer.value;
+    const intake = dayIntake(log, per, store.foods);
+    const dKcal = deviOf(intake.kcal, profile.value.kcal);
+    const week = weekCn[new Date(d + 'T00:00:00').getDay()];
+    return { d, log, intake, dKcal, week };
+  }));
+
+/* 加餐条目文本：名称 + 克数（自然单位），如「鸡蛋 100g」 */
+function addonText(list) {
+  return list.map(it => {
+    const f = foodById(it.id);
+    return f ? f.name + ' ' + it.g + 'g' : '未知食材';
+  }).join(' + ');
+}
 </script>
 
 <template>
@@ -89,5 +110,29 @@ async function addWeight() {
     </div>
 
     <RuleCard />
+
+    <div class="sec-head">
+      <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/></svg>
+      <b>每日饮食回溯</b>
+    </div>
+    <p class="t-note">按天查看实际吃下多少，热量徽标为当天摄入 vs 目标 {{ profile.kcal }} kcal 的偏差</p>
+
+    <div v-if="!dietHistory.length" class="empty">
+      <span>暂无打卡记录，去今日页完成每日打卡后这里会按天生成回溯卡片</span>
+    </div>
+    <div v-for="h in dietHistory" :key="h.d" class="history-card">
+      <div class="history-date mono">{{ h.d.slice(5) }}<i>周{{ h.week }}</i></div>
+      <div class="history-main">
+        <div class="history-item"><b>正餐</b><span>{{ h.log.meals }} 份{{ h.log.batchName ? ' · ' + h.log.batchName : '' }}</span></div>
+        <div class="history-item"><b>蛋白粉</b><span>{{ h.log.whey }} 勺</span></div>
+        <div v-if="h.log.breakfast.length" class="history-item"><b>早餐</b><span>{{ addonText(h.log.breakfast) }}</span></div>
+        <div v-if="h.log.late.length" class="history-item"><b>晚加餐</b><span>{{ addonText(h.log.late) }}</span></div>
+      </div>
+      <div class="history-nutri mono">
+        <span class="bar-badge" :class="statusOf(h.dKcal)">{{ pctText(h.dKcal) }}</span>
+        {{ Math.round(h.intake.kcal) }} / {{ profile.kcal }} kcal · P{{ round1(h.intake.p) }}
+        C{{ round1(h.intake.c) }} F{{ round1(h.intake.f) }}
+      </div>
+    </div>
   </section>
 </template>

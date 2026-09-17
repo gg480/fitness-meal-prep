@@ -12,6 +12,16 @@ const advOpen = ref(false);
 const fileEl = ref(null);
 const manual = computed(() => store.settings.manualTdee > 0);
 
+/* R5 周减速率三档（kg/周），与活动系数同用 select 且绑定 number，持久化到 settings */
+const WEEKRATE_OPTIONS = [
+  { v: 0.25, label: '0.25 kg/周' },
+  { v: 0.5, label: '0.50 kg/周' },
+  { v: 0.75, label: '0.75 kg/周' }
+];
+
+/* 建议缺口参考读数：1kg 脂肪≈7700kcal，÷7 折算每日差额（0.25→275/0.5→550/0.75→825） */
+const weeklyKcal = computed(() => Math.round(store.settings.weeklyRate * 7700 / 7));
+
 /* 表 4-1 范围钳制（高级档按任务口径 1.2–2.2 / 15–30），防止越界值污染计算链 */
 function clampSettings() {
   const s = store.settings;
@@ -160,6 +170,31 @@ function onImportFile(ev) {
       <div class="tile big"><span class="t-lab">宏量目标 蛋白/脂肪/碳水</span><span class="t-val mono">{{ profile.p }}/{{ profile.f }}/{{ profile.c }}</span><span class="t-unit">g</span></div>
     </div>
     <p class="ratio-note mono">{{ ratioNote }}</p>
+
+    <div class="card">
+      <div class="card-title">
+        <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        减重目标
+      </div>
+      <p class="t-note">设定目标体重与周减重速率；weightTrack 开启后 TDEE 按最近体重滚动计算</p>
+      <div class="form-grid">
+        <div class="field">
+          <label>目标体重 kg（30–200）</label>
+          <input v-model.number="store.settings.targetWeight" class="mono" type="number" min="30" max="200" step="0.5">
+        </div>
+        <div class="field">
+          <label>周减速率 kg/周</label>
+          <select v-model.number="store.settings.weeklyRate">
+            <option v-for="r in WEEKRATE_OPTIONS" :key="r.v" :value="r.v">{{ r.label }}</option>
+          </select>
+        </div>
+      </div>
+      <label class="addon-toggle mt16">
+        <input type="checkbox" v-model="store.settings.weightTrack">
+        TDEE 跟随最近体重记录
+      </label>
+      <p class="ratio-note mono">建议缺口 = {{ store.settings.weeklyRate }}×7700÷7 ≈ {{ weeklyKcal }} kcal（仅参考，不强制覆盖手填缺口）</p>
+    </div>
 
     <div class="card">
       <div class="card-title">

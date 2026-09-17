@@ -6,9 +6,10 @@ import { naturalOf, equivText } from '../utils';
 
 const props = defineProps({
   food: Object,
-  grams: { type: Number, default: null }
+  grams: { type: Number, default: null },
+  locked: { type: Boolean, default: false }
 });
-const emit = defineEmits(['toggle', 'grams', 'delete-food']);
+const emit = defineEmits(['toggle', 'grams', 'delete-food', 'lock']);
 
 const on = computed(() => props.grams != null);
 const nu = computed(() => (props.food ? naturalOf(props.food.id) : null));
@@ -35,6 +36,10 @@ const equiv = computed(() => (on.value && nu.value ? equivText(props.grams, nu.v
       @click.stop @input="emit('grams', { id: food.id, value: $event.target.value, phase: 'input' })"
       @change="emit('grams', { id: food.id, value: $event.target.value, phase: 'change' })">
     <span class="ing-unit">g</span>
+    <!-- 锁定开关：锁定后自动搭配保持该食材克数不动（仅选用态可切） -->
+    <button v-if="on" class="c-lock" type="button"
+      :class="{ locked: props.locked }" :aria-label="locked ? '解锁' + food.name : '锁定' + food.name"
+      @click.stop="emit('lock', food.id)">{{ locked ? '🔒' : '🔓' }}</button>
     <button v-if="food.custom" class="c-del" type="button"
       :aria-label="'删除' + food.name" @click.stop="emit('delete-food', food.id)">×</button>
   </div>

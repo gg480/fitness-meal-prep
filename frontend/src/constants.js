@@ -5,25 +5,13 @@
 /* F5 每勺蛋白粉（30g 干重，按乳清蛋白粉 383kcal/100g 折算） */
 export const WHEY_SCOOP = { kcal: 114.9, p: 24, c: 2.1, f: 1.5 };
 
-/* F5 早餐 / 晚加餐选项池：每个选项是迷你配方，营养与食材库同口径 */
-export const MEAL_OPTIONS = {
-  breakfast: [
-    { id: 'none', label: '不吃', kcal: 0, p: 0, c: 0, f: 0 },
-    { id: 'egg_milk', label: '鸡蛋 2 个 + 牛奶 250ml', kcal: 300, p: 14, c: 20, f: 16 },
-    { id: 'sweet150', label: '红薯 150g', kcal: 92, p: 1.7, c: 23, f: 0.3 },
-    { id: 'oat_milk', label: '燕麦 40g + 牛奶 250ml', kcal: 270, p: 12, c: 38, f: 7 }
-  ],
-  late: [
-    { id: 'none', label: '不吃', kcal: 0, p: 0, c: 0, f: 0 },
-    { id: 'sweet200', label: '红薯 200g（常态）', kcal: 122, p: 2.2, c: 30.6, f: 0.4 },
-    { id: 'whey1', label: '蛋白粉 1 勺', kcal: 115, p: 24, c: 2.1, f: 1.5 }
-  ]
-};
+/* F5 早餐 / 晚加餐快捷食材池（机动加餐）：点选与录克数，鸡蛋红薯为常态 */
+export const QUICK_FOODS = ['egg', 'sweet_potato', 'milk', 'corn', 'oat_rice', 'whey', 'tomato', 'cucumber'];
 
-/* 每日预演的默认加项：蛋白粉 3 勺（90g）+ 红薯 200g（常态吃） */
+/* 每日预演的默认加项：蛋白粉 2 勺（60g），不再默认加红薯 */
 export const ADDONS = {
-  label: '蛋白粉 3 勺 + 红薯 200g',
-  kcal: 466.7, p: 74.2, c: 36.9, f: 4.9
+  label: '蛋白粉 2 勺',
+  kcal: 229.8, p: 48, c: 4.2, f: 3.0
 };
 
 /* 自然计量单位：贴合实际做饭习惯（鸡蛋按个、蛋白粉按勺、油按瓷勺…）
@@ -31,6 +19,7 @@ export const ADDONS = {
 export const NATURAL_UNITS = {
   egg: { u: '个', g: 50 },
   whey: { u: '勺', g: 30 },
+  milk: { u: '盒', g: 250 },
   oil: { u: '瓷勺', g: 10, half: true },
   soy_sauce: { u: '瓷勺', g: 10, half: true },
   oyster_sauce: { u: '瓷勺', g: 15, half: true },
@@ -73,12 +62,13 @@ export const CAT_DEFAULT_G = { grain: 100, protein: 150, veg: 150, fat: 10 };
 
 export const DEFAULT_PORTIONS = 6;
 
-/* 今日打卡的初始值（无当日记录时） */
-export const DEFAULT_TODAY = { meals: 2, whey: 3, breakfast: 'none', late: 'sweet200', consumed: 0 };
+/* 今日打卡的初始值：全部归零，打开今日页不预填任何虚记 */
+export const DEFAULT_TODAY = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0 };
 
 /* 设置字段兜底默认（后端种子缺失时前端不至于 NaN） */
 export const SETTINGS_FALLBACK = {
   weight: 90, height: 175, age: 30, sex: 'm',
   act: 1.375, gap: 750, proteinPer: 1.5, fatRatio: 23,
-  manualTdee: null, addonsOn: true, current_recipe_id: 1
+  manualTdee: null, addonsOn: true, current_recipe_id: 1,
+  targetWeight: 80, weeklyRate: 0.5, weightTrack: false
 };

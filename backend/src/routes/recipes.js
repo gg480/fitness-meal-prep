@@ -26,6 +26,13 @@ function assertRecipeBody(body) {
       throw new HttpError(400, `食材 ${foodId} 的克重必须为正数`);
     }
   }
+  // R4 锁定：缺省视作空数组（全部可变，兼容旧数据）；给定则必须是 items 里存在的食材 id 数组
+  if (body.locked !== undefined) {
+    if (!Array.isArray(body.locked)) throw new HttpError(400, 'locked 必须为数组');
+    for (const id of body.locked) {
+      if (!(id in body.items)) throw new HttpError(400, `locked 引用了不在 items 中的食材: ${id}`);
+    }
+  }
 }
 
 // 入库前归一化 items：克重转数字、剔除空值，保证 JSON 紧凑稳定
@@ -35,7 +42,7 @@ function normalizeItems(items) {
   return JSON.stringify(clean);
 }
 
-// 配方行 → API 响应对象：items 解析回对象并附全锅营养 totals
+// 配方行 → API 响应对象：items 解析回对象并附全锅营养 totals；locked 解析为数组
 function buildRecipe(row) {
   const items = JSON.parse(row.items);
   return {
@@ -43,6 +50,7 @@ function buildRecipe(row) {
     name: row.name,
     portions: row.portions,
     items,
+    locked: JSON.parse(row.locked || '[]'),  // 老库迁移后 locked 恒有值，兜底解析以防脏数据
     totals: calcRecipeTotals(items),
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -60,16 +68,18 @@ router.get('/:id', wrap((req, res) => {
 
 router.post('/', wrap((req, res) => {
   assertRecipeBody(req.body);
-  const result = db.prepare('INSERT INTO recipes (name, portions, items) VALUES (?, ?, ?)')
-    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items));
+  const locked = req.body.locked ?? [];  // 缺省全可变，存空数组
+  const result = db.prepare('INSERT INTO recipes (name, portions, items, locked) VALUES (?, ?, ?, ?)')
+    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), JSON.stringify(locked));
   res.status(201).json({ code: 0, data: buildRecipe(findRecipe(result.lastInsertRowid)) });
 }));
 
 router.put('/:id', wrap((req, res) => {
   const row = findRecipe(req.params.id);
   assertRecipeBody(req.body);
-  db.prepare("UPDATE recipes SET name = ?, portions = ?, items = ?, updated_at = datetime('now','localtime') WHERE id = ?")
-    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), row.id);
+  const locked = req.body.locked ?? JSON.parse(row.locked || '[]');  // 未传则保留原锁定，避免误清空
+  db.prepare("UPDATE recipes SET name = ?, portions = ?, items = ?, locked = ?, updated_at = datetime('now','localtime') WHERE id = ?")
+    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), JSON.stringify(locked), row.id);
   res.json({ code: 0, data: buildRecipe(findRecipe(row.id)) });
 }));
 

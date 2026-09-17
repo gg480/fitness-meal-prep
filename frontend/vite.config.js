@@ -10,6 +10,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    // SPEC 第 2 节：构建产物由 Express 静态托管，必须落到 backend/public（Express 只 serve 该目录）
+    outDir: '../backend/public',
   },
 })

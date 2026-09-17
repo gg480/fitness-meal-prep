@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { seedIfEmpty } from './seed.js';
+import { seedIfEmpty, ensurePresetFoods } from './seed.js';
 
 // 数据库文件统一放在 DATA_DIR（Docker 卷挂载点），首次运行目录可能不存在
 const dataDir = process.env.DATA_DIR || './data';
@@ -27,6 +27,7 @@ db.exec(`
     name TEXT NOT NULL DEFAULT '',
     portions INTEGER NOT NULL,
     items TEXT NOT NULL,            -- JSON: {"rice":510,"pork_loin":500,...}
+    locked TEXT NOT NULL DEFAULT '[]', -- v2.1 R4: JSON id 数组，锁定食材自动搭配中克数不变
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
@@ -48,9 +49,11 @@ db.exec(`
     date TEXT PRIMARY KEY,          -- 'YYYY-MM-DD'
     meals INTEGER NOT NULL,         -- 正餐份数 0-4
     whey INTEGER NOT NULL,          -- 蛋白粉勺数 0-6
-    breakfast TEXT NOT NULL,        -- 'none'|'egg_milk'|'sweet150'|'oat_milk'
-    late TEXT NOT NULL,             -- 'none'|'sweet200'|'whey1'
-    consumed REAL NOT NULL          -- 已从库存扣减份数（FIFO 已消耗）
+    breakfast TEXT NOT NULL,        -- 加餐条目数组 JSON [{"id","g"}]（旧值字符串 id 由前端归一化）
+    late TEXT NOT NULL,             -- 同上，晚加餐条目数组
+    consumed REAL NOT NULL,         -- 已从库存扣减份数（FIFO 已消耗）
+    per_snap TEXT,                  -- 打卡时每份营养快照 JSON {kcal,p,c,f}（批次吃完回溯不失真）
+    batch_name TEXT                 -- 打卡时批次名，供回溯卡片展示
   );
 
   CREATE TABLE IF NOT EXISTS weights (
@@ -65,5 +68,40 @@ db.exec(`
   );
 `);
 
-// 首次启动（foods 表为空）写入 SPEC 第 2 节种子数据（投产干净库，不含演示数据）
+// 轻量迁移：老库 day_logs 缺 per_snap/batch_name 列时补建（CREATE TABLE IF NOT EXISTS 不会改已存在表）
+function migrateDayLogsColumns() {
+  const cols = db.prepare('PRAGMA table_info(day_logs)').all().map(c => c.name);
+  if (!cols.includes('per_snap')) db.exec('ALTER TABLE day_logs ADD COLUMN per_snap TEXT');
+  if (!cols.includes('batch_name')) db.exec('ALTER TABLE day_logs ADD COLUMN batch_name TEXT');
+}
+migrateDayLogsColumns();
+
+// 老库 recipes 缺 locked 列时补建（CREATE TABLE IF NOT EXISTS 不会改已存在表）；
+// 未命中锁定的旧配方默认空数组 = 全部可变，符合 R4 语义
+function migrateRecipesColumns() {
+  const cols = db.prepare('PRAGMA table_info(recipes)').all().map(c => c.name);
+  if (!cols.includes('locked')) db.exec('ALTER TABLE recipes ADD COLUMN locked TEXT NOT NULL DEFAULT \'[]\'');
+}
+migrateRecipesColumns();
+
+// 老库升级：R5 在 seedIfEmpty 后才引入 targetWeight/weeklyRate/weightTrack，
+// 已有 settings 表不会补键（seedIfEmpty 只在 foods 空时跑）。此处对缺失键幂等补齐，
+// 且绝不覆盖已存在的值（用户改过的不回滚）。与 SETTINGS_FALLBACK / seed DEFAULT_SETTINGS 同口径。
+function ensureSettingsKeys() {
+  const defaults = {
+    targetWeight: 80, weeklyRate: 0.5, weightTrack: false,
+  };
+  const has = db.prepare('SELECT 1 AS n FROM settings WHERE key = ?');
+  const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!has.get(key)) insert.run(key, JSON.stringify(value));
+  }
+}
+// 首次启动（foods 表为空）写入 SPEC 第 2 节种子数据（投产干净库，不含演示数据）。
+// 必须先于 ensureSettingsKeys：种子循环已含 R5 三键，若先补键再播种会 UNIQUE 冲突
 seedIfEmpty(db);
+// 老库升级：seedIfEmpty 对已存在的库会跳过，此处幂等补齐 R5 三键（serve 老库迁移场景）。
+// 已存在键由 INSERT OR IGNORE 跳过、不覆盖用户改过的值
+ensureSettingsKeys();
+// 老库升级：确保所有预设食材（含新二开 milk）幂等补齐，不重复不覆盖
+ensurePresetFoods(db);

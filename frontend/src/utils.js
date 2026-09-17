@@ -1,7 +1,7 @@
 /* utils.js — 纯计算层（不依赖 Vue，可被 Node 断言脚本直接 import）
  * 逻辑与原型 app.js / verify-autogen.mjs 逐行同构
  */
-import { ADDONS, NATURAL_UNITS } from './constants.js';
+import { ADDONS, NATURAL_UNITS, WHEY_SCOOP } from './constants.js';
 
 export const round1 = n => Math.round(n * 10) / 10;
 export const deviOf = (a, t) => (a - t) / t;
@@ -18,9 +18,12 @@ export const statusOf = d => (Math.abs(d) <= 0.10 ? 'ok' : Math.abs(d) <= 0.20 ?
 export const worseOf = (a, b) => (a === 'bad' || b === 'bad' ? 'bad' : a === 'warn' || b === 'warn' ? 'warn' : 'ok');
 export const naturalOf = id => NATURAL_UNITS[id] || null;
 
-/* ===== F1 参数计算链：BMR → TDEE → 目标热量 → 宏量（Mifflin-St Jeor） ===== */
-export function calcProfile(s) {
-  const base = 10 * s.weight + 6.25 * s.height - 5 * s.age;
+/* ===== F1 参数计算链：BMR → TDEE → 目标热量 → 宏量（Mifflin-St Jeor） =====
+ * bodyWeight 可选第2参：weightTrack 开启时由 store 传入最近体重；缺省/未开启退回 s.weight，
+ * 保持既有校验断言脚本仅调 calcProfile(settings) 的行为不变。 */
+export function calcProfile(s, bodyWeight) {
+  const w = bodyWeight != null ? bodyWeight : s.weight;
+  const base = 10 * w + 6.25 * s.height - 5 * s.age;
   const bmr = s.sex === 'f' ? base - 161 : base + 5;
   const tdee = s.manualTdee > 0 ? s.manualTdee : bmr * s.act;
   const kcal = tdee - s.gap;
@@ -125,21 +128,42 @@ function allocFat(per, acc, ids, targetF, foods) {
   addPerFood(per, acc, oilId, Math.round(gap / 5) * 5, foods);
 }
 
-/* 自动搭配主入口（与 verify-autogen.mjs 同构；profile/foods 参数化便于断言复验） */
-export function autoGenerate(selectedIds, days, profile, foods) {
+/* 自动搭配主入口（与 verify-autogen.mjs 同构；profile/foods 参数化便于断言复验）
+ * 两阶段：阶段一锁定食材克数不变并计入 base，阶段二可变食材只补剩余目标。
+ * locked 为 [{ id, g }]，g 为当前工作区（整锅）克数；默认 [] 保持原有行为。 */
+export function autoGenerate(selectedIds, days, profile, foods, locked = []) {
   const byCat = cat => selectedIds.filter(id => foods.find(x => x.id === id).cat === cat);
   const grains = byCat('grain'), proteins = byCat('protein'), vegs = byCat('veg');
   if (!grains.length || !proteins.length) return { error: true };
   const t = perMealTargets(profile);
-  const per = {}, acc = { p: 0, c: 0, f: 0 };
-  allocVeg(per, acc, vegs, foods);
-  allocGrain(per, acc, grains, t.c, foods);
-  allocProtein(per, acc, proteins, t.p - acc.p, foods);
-  allocFat(per, acc, selectedIds, t.f, foods);
   const n = days * 2;
+  const per = {}, acc = { p: 0, c: 0, f: 0 };
+
+  // 阶段一：锁定食材克数平摊到每份，营养计入 acc 基数，供可变食材扣减
+  const lockedIds = locked.filter(x => selectedIds.indexOf(x.id) >= 0);
+  let lockedProtein = 0;
+  lockedIds.forEach(({ id, g }) => {
+    const f = foods.find(x => x.id === id); if (!f) return;
+    per[id] = g / n;
+    const k = per[id] / 100;
+    acc.p += f.p * k; acc.c += f.c * k; acc.f += f.f * k;
+    if (f.cat === 'protein') lockedProtein += f.p * k;
+  });
+  // lockedIds 是 [{id,g}] 对象数组，indexOf 按引用比较恒 -1，必须用 findIndex 按 id 匹配，
+  // 否则锁定食材逃不过 rest 过滤、会在阶段二被 allocProtein 重新分配覆盖克数
+  const rest = id => selectedIds.indexOf(id) >= 0 && lockedIds.findIndex(x => x.id === id) < 0;
+
+  // 阶段二：可变食材按（剩余目标 − base）补齐；acc 已含锁定蛋白，target 直接减 acc
+  allocVeg(per, acc, vegs.filter(rest), foods);
+  allocGrain(per, acc, grains.filter(rest), t.c, foods);
+  allocProtein(per, acc, proteins.filter(rest), t.p - acc.p, foods);
+  allocFat(per, acc, selectedIds.filter(rest), t.f, foods);
+
   const items = {};
   Object.keys(per).forEach(id => { items[id] = per[id] * n; });
-  return { error: false, items, portions: n, per };
+  // 锁定蛋白已达/接近每餐目标时给出可辨识信号，让配方页提示用户
+  const lockedProteinOver = lockedProtein >= t.p * 0.9;
+  return { error: false, items, portions: n, per, lockedProteinOver };
 }
 
 export function genAdvice(daily, profile) {
@@ -224,4 +248,65 @@ export function autoRecipeName(items, foods) {
 
 export function batchName(recipe, foods) {
   return (recipe.name || autoRecipeName(recipe.items, foods)) + ' 锅';
+}
+
+/* ===== 机动加餐（F5 二开）：条目编辑与当日摄入计算，与原型 app.js 同构 ===== */
+
+/* 旧选项池结构（字符串 id）→ 新加餐条目数组的一次性迁移，兼容老打卡数据 */
+export const LEGACY_OPTIONS = {
+  none: [],
+  egg_milk: [{ id: 'egg', g: 100 }, { id: 'milk', g: 250 }],
+  sweet150: [{ id: 'sweet_potato', g: 150 }],
+  oat_milk: [{ id: 'oat_rice', g: 40 }, { id: 'milk', g: 250 }],
+  sweet200: [{ id: 'sweet_potato', g: 200 }],
+  whey1: [{ id: 'whey', g: 30 }],
+};
+
+/* 归一化早餐/晚加餐字段：数组保留合法条目，否则按旧选项池映射（老数据不丢） */
+export function normExtras(v) {
+  if (Array.isArray(v)) return v.filter(it => it && it.id && it.g > 0);
+  return LEGACY_OPTIONS[v] || [];
+}
+
+/* 归一化某天打卡：补默认份数、快照字段，加餐字段走 normExtras */
+export function normDaylog(log) {
+  const t = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, perSnap: null, batchName: '' };
+  if (!log) return t;
+  return {
+    meals: log.meals || 0,
+    whey: log.whey || 0,
+    breakfast: normExtras(log.breakfast),
+    late: normExtras(log.late),
+    consumed: log.consumed || 0,
+    perSnap: log.perSnap || null,
+    batchName: log.batchName || '',
+  };
+}
+
+/* 单份加餐条目的营养（从食材库按克数比折算，与配方计算同口径） */
+export function addonNutri(it, foods) {
+  const f = foods.find(x => x.id === it.id);
+  if (!f) return { kcal: 0, p: 0, c: 0, f: 0 };
+  const k = it.g / 100;
+  return { kcal: f.kcal * k, p: f.p * k, c: f.c * k, f: f.f * k };
+}
+
+/* 一组加餐条目累计营养 */
+export function sumExtras(list, foods) {
+  return list.reduce((acc, it) => {
+    const n = addonNutri(it, foods);
+    return { kcal: acc.kcal + n.kcal, p: acc.p + n.p, c: acc.c + n.c, f: acc.f + n.f };
+  }, { kcal: 0, p: 0, c: 0, f: 0 });
+}
+
+/* 某天总摄入 = 正餐 + 蛋白粉 + 早餐 + 晚加餐；per 为当日每份营养快照 */
+export function dayIntake(log, per, foods) {
+  const w = WHEY_SCOOP;
+  const b = sumExtras(log.breakfast, foods), l = sumExtras(log.late, foods);
+  return {
+    kcal: per.kcal * log.meals + w.kcal * log.whey + b.kcal + l.kcal,
+    p: per.p * log.meals + w.p * log.whey + b.p + l.p,
+    c: per.c * log.meals + w.c * log.whey + b.c + l.c,
+    f: per.f * log.meals + w.f * log.whey + b.f + l.f,
+  };
 }

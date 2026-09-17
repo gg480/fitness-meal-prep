@@ -45,6 +45,11 @@ export async function deleteCustomFood(id) {
   return req('DELETE', '/foods/' + encodeURIComponent(id));
 }
 
+/* 在线食物搜索：走同源后端代理（前端直调会被 CORS 拦），返回 {name,brand,kcal,p,c,f,cat}[] */
+export async function searchOnlineFoods(q) {
+  return req('GET', '/foods/search-online?q=' + encodeURIComponent(q));
+}
+
 /* ===== 配方（REST：列表 + 当前指针存于 settings.current_recipe_id） ===== */
 export async function fetchRecipes() {
   return req('GET', '/recipes');

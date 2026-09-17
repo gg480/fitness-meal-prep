@@ -8,11 +8,24 @@ const router = Router();
 const NUMBER_KEYS = ['weight', 'height', 'age', 'act', 'gap', 'proteinPer', 'fatRatio'];
 const STRING_KEYS = ['sex'];
 
-// 校验并归一化部分更新：只处理白名单内出现的键，未知键拒绝
 function pickSettings(body) {
   const picked = {};
   for (const [key, value] of Object.entries(body)) {
-    if (NUMBER_KEYS.includes(key)) {
+    if (key === 'targetWeight') {
+      // 目标体重钳制 30–200，超出直接 400（跨页阈值，非法值会让减重推导演算失真）
+      if (!Number.isFinite(Number(value)) || Number(value) < 30 || Number(value) > 200) {
+        throw new HttpError(400, 'targetWeight 必须为 30–200 的数字');
+      }
+      picked[key] = Number(value);
+    } else if (key === 'weeklyRate') {
+      // 周减速率只允许三档，硬件枚举：其他值违反契约返回 400
+      const ok = [0.25, 0.5, 0.75].some(v => Number(value) === v);
+      if (!Number.isFinite(Number(value)) || !ok) throw new HttpError(400, 'weeklyRate 只允许 0.25/0.5/0.75');
+      picked[key] = Number(value);
+    } else if (key === 'weightTrack') {
+      if (typeof value !== 'boolean') throw new HttpError(400, 'weightTrack 必须为布尔值');
+      picked[key] = value;
+    } else if (NUMBER_KEYS.includes(key)) {
       if (!Number.isFinite(Number(value))) throw new HttpError(400, `设置项 ${key} 必须为数字`);
       picked[key] = Number(value);
     } else if (STRING_KEYS.includes(key)) {

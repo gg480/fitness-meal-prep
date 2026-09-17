@@ -4,7 +4,9 @@ WORKDIR /build
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
-RUN npm run build
+# 用 --outDir 覆盖 vite.config.outDir(../backend/public)：Docker 阶段3依赖 /build/dist，
+# 且镜像内无 backend 目录；本机构建仍落 backend/public，二者互不干扰
+RUN npm run build -- --outDir dist
 
 # ---- 阶段2：安装后端依赖 ----
 # better-sqlite3 在 musl(alpine) 上无预编译产物，需要本地编译工具链

@@ -41,6 +41,9 @@ const fifoTip = computed(() => {
 /* 当前库存汇总（done 阶段） */
 const invSum = computed(() => store.inventory.reduce((s, b) => s + b.portions, 0));
 
+/* 本锅详情：每份营养 = 整锅各项 ÷ 实际分装份数（与 pack 阶段同口径） */
+const potPer = computed(() => perOf(calcTotals(store.recipe.items, store.foods), store.packPortions || 1));
+
 function toggleWeigh(id) {
   if (store.weigh[id]) delete store.weigh[id]; // 再点撤销误触
   else store.weigh[id] = true;
@@ -82,7 +85,7 @@ function again() {
 
 /* 清空重选：工作区配方清空并落库（与原型行为一致） */
 async function fresh() {
-  store.recipe = { id: store.recipe.id, name: '', portions: 6, items: {} };
+  store.recipe = { id: store.recipe.id, name: '', portions: 6, items: {}, locked: [] };
   store.weigh = {};
   store.cookPhase = 'weigh';
   try { await api.saveRecipe(store.recipe); } catch (err) { /* 重置失败不阻断本地状态 */ }
@@ -112,6 +115,7 @@ const goRecipe = () => { store.page = 'recipe'; window.scrollTo(0, 0); };
           <span class="k-main">
             <b class="k-name">{{ foodById(id).name }}</b>
             <span class="k-badges">
+              <span v-if="(store.recipe.locked || []).includes(id)" class="badge big lock" title="已锁定，克数自动搭配时保持不变">🔒</span>
               <span class="badge big">{{ foodById(id).unit }}</span>
               <span v-if="naturalOf(id)" class="badge big qty">≈ {{ qtyText(store.recipe.items[id], naturalOf(id)) }}</span>
             </span>
@@ -168,6 +172,31 @@ const goRecipe = () => { store.page = 'recipe'; window.scrollTo(0, 0); };
         <svg class="ic done-ic" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.801 10A10 10 0 1 1 17 3.335"/><path d="m9 11 3 3L22 4"/></svg>
         <b>已入库</b>
         <span>批次「{{ batchName(store.recipe, store.foods) }}」已加入库存，先吃先扣</span>
+      </div>
+      <!-- 本锅详情（R2）：入库成功后复核本锅配方，便于下次照做或核对 -->
+      <div class="card">
+        <div class="card-title">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22h9"/><path d="M12 2h9v6"/><path d="M9 13 3 6"/><path d="m8 3-5 6 6 8 5-6 5 6 3-4"/></svg>
+          本锅详情
+          <span class="inv-days mono">分装 {{ store.packPortions }} 份</span>
+        </div>
+        <h4 class="card-sub">每份营养</h4>
+        <NutrientTiles :kcal="round1(potPer.kcal)" :p="round1(potPer.p)"
+          :c="round1(potPer.c)" :f="round1(potPer.f)" />
+        <p class="raw-ref mono">每份生料参考 ≈ {{ round1(potPer.weight) }} g（本锅分装 {{ store.packPortions }} 份）</p>
+        <h4 class="card-sub">食材清单</h4>
+        <ul class="pd-list">
+          <li v-for="id in weighIds" :key="id">
+            <span class="pd-main">
+              <span class="pd-name">{{ foodById(id).name }}</span>
+              <span class="pd-badges">
+                <span class="badge big">{{ foodById(id).unit }}</span>
+                <span v-if="naturalOf(id)" class="badge big qty">≈ {{ qtyText(store.recipe.items[id], naturalOf(id)) }}</span>
+              </span>
+            </span>
+            <span class="pd-grams mono">{{ store.recipe.items[id] }}<i>g</i></span>
+          </li>
+        </ul>
       </div>
       <div class="card">
         <div class="card-title">

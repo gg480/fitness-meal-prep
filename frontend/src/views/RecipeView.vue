@@ -45,6 +45,13 @@ function toggleFood(id) {
   else store.recipe.items[id] = CAT_DEFAULT_G[f.cat];
 }
 
+/* 取消所有选择：清空配方食材，同时作废称重进度（防残留称重记录） */
+function clearAll() {
+  store.recipe.items = {};
+  store.weigh = {};
+  toast('已取消所有食材选择');
+}
+
 /* 克重输入两阶段：input 即时汇总，change 空值回退分类默认 */
 function onGrams({ id, value, phase }) {
   const v = parseInt(value, 10);
@@ -89,9 +96,13 @@ async function removeCustomFood(id) {
   }
 }
 
-/* 自动搭配：勾选集合 → 按每份目标分配克数；手动勾选但未分配的（如酱油）保留原值 */
+/* 自动搭配：勾选集合 → 按每份目标分配克数；锁定食材克数保持并入 base；
+   手动勾选但未分配的（如酱油）保留原值 */
 function autoGen() {
-  const res = autoGenerate(Object.keys(store.recipe.items), store.days, profile.value, store.foods);
+  const lockedArr = (store.recipe.locked || [])
+    .filter(id => store.recipe.items[id] != null)
+    .map(id => ({ id, g: store.recipe.items[id] }));
+  const res = autoGenerate(Object.keys(store.recipe.items), store.days, profile.value, store.foods, lockedArr);
   if (res.error) {
     toast('自动搭配需要至少勾选 1 种主食和 1 种蛋白');
     return;
@@ -103,8 +114,17 @@ function autoGen() {
   store.recipe.items = items;
   store.recipe.portions = res.portions;
   store.packPortions = res.portions;
+  if (res.lockedProteinOver) toast('锁定蛋白已近/超目标');
   const daily = dailyPreview(perOf(calcTotals(items, store.foods), res.portions), true);
   toast(genAdvice(daily, profile.value) || '已按每份目标生成，微调克数后进入称重');
+}
+
+/* 锁定切换：存在即移除 / 不存在即加入，供自动搭配保持该食材克数 */
+function toggleLock(id) {
+  const locked = store.recipe.locked || (store.recipe.locked = []);
+  const i = locked.indexOf(id);
+  if (i >= 0) locked.splice(i, 1);
+  else locked.push(id);
 }
 
 /* 主食只勾大米时建议糙米替换 1/3，鼓励渐进过渡杂粮 */
@@ -155,7 +175,7 @@ async function saveRecipeToLib() {
 async function loadRecipe(id) {
   const r = recipeLib.value.find(x => x.id === id);
   if (!r) return;
-  store.recipe = { id: r.id, name: r.name, portions: r.portions, items: Object.assign({}, r.items) };
+  store.recipe = { id: r.id, name: r.name, portions: r.portions, items: Object.assign({}, r.items), locked: r.locked || [] };
   store.packPortions = r.portions;
   store.weigh = {}; // 配方变了，称重进度作废
   recipeName.value = r.name;
@@ -223,12 +243,18 @@ async function goCook() {
       <input class="search" type="search" placeholder="搜索食材…" autocomplete="off"
         :value="store.q" @input="store.q = $event.target.value">
 
+      <div class="list-head">
+        <span class="list-head-tip">{{ Object.keys(store.recipe.items).length }} 种已选</span>
+        <button v-if="Object.keys(store.recipe.items).length" class="btn ghost sm clear-all" type="button" @click="clearAll">取消所有选择</button>
+      </div>
+
       <div class="food-list">
         <div v-if="!visibleFoods.length" class="empty">
           <span>没有匹配的食材，换个关键词试试</span>
         </div>
         <FoodRow v-for="f in visibleFoods" :key="f.id" :food="f" :grams="store.recipe.items[f.id] ?? null"
-          @toggle="toggleFood" @grams="onGrams" @delete-food="removeCustomFood" />
+          :locked="(store.recipe.locked || []).includes(f.id)"
+          @toggle="toggleFood" @grams="onGrams" @delete-food="removeCustomFood" @lock="toggleLock" />
       </div>
 
       <CustomFoodForm @submit-food="submitCustomFood" />

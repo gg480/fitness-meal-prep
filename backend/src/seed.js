@@ -21,6 +21,7 @@ const SEED_FOODS = [
   { id: 'egg',            name: '鸡蛋',           category: 'protein', unit: '生重', kcal: 144, protein: 13.3, carbs: 2.8, fat: 8.8 },
   { id: 'tofu',           name: '北豆腐',         category: 'protein', unit: '生重', kcal: 116, protein: 12.2, carbs: 4.2, fat: 4.8 },
   { id: 'whey',           name: '乳清蛋白粉',     category: 'protein', unit: '干重', kcal: 383, protein: 80.0, carbs: 7.0, fat: 5.0 },
+  { id: 'milk',           name: '纯牛奶',         category: 'protein', unit: '毫升', kcal: 65,  protein: 3.3,  carbs: 5.0,  fat: 3.6 },
   // 蔬菜 veg
   { id: 'broccoli',    name: '西兰花',     category: 'veg', unit: '生重', kcal: 36,  protein: 4.1, carbs: 4.3,  fat: 0.6 },
   { id: 'carrot',      name: '胡萝卜',     category: 'veg', unit: '生重', kcal: 39,  protein: 1.0, carbs: 8.8,  fat: 0.2 },
@@ -48,11 +49,12 @@ const DEFAULT_RECIPE = {
   items: { rice: 510, pork_loin: 500, broccoli: 400, carrot: 400, corn: 300, oil: 60 },
 };
 
-// 设置默认值（PRD 表 4-1）；current_recipe_id 由种子写入时回填实际配方 id
+// 设置默认值（PRD 表 4-1 + v2.1 R5）；current_recipe_id 由种子写入时回填实际配方 id
 const DEFAULT_SETTINGS = {
   weight: 90, height: 175, age: 30, sex: 'm',
   act: 1.375, gap: 750, proteinPer: 1.5, fatRatio: 23,
   manualTdee: null, addonsOn: true,
+  targetWeight: 80, weeklyRate: 0.5, weightTrack: false,
 };
 
 export function seedIfEmpty(db) {
@@ -64,7 +66,7 @@ export function seedIfEmpty(db) {
     VALUES (@id, @name, @category, @unit, @kcal, @protein, @carbs, @fat, 1)
   `);
   const insertRecipe = db.prepare('INSERT INTO recipes (name, portions, items) VALUES (?, ?, ?)');
-  const insertSetting = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+  const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
 
   // 事务保证种子数据要么全写入、要么全不写（半初始化状态最难排查）
   const run = db.transaction(() => {
@@ -80,5 +82,17 @@ export function seedIfEmpty(db) {
     // 规则引擎空状态：单行表，必须随库初始化存在
     db.prepare("INSERT INTO rule_state (id, ignored, history) VALUES (1, '{}', '[]')").run();
   });
+  run();
+}
+
+// 幂等补齐预设食材：新二开引入的预设（如 milk）对已有库不会因 seedIfEmpty 跳过而缺失，
+// 用 upsert 保证老库升级后食材库完整（预设不允许重名/语义 id 是契约，冲突即忽略）
+export function ensurePresetFoods(db) {
+  const u = db.prepare(`
+    INSERT INTO foods (id, name, category, unit, kcal, protein, carbs, fat, is_preset)
+    VALUES (@id, @name, @category, @unit, @kcal, @protein, @carbs, @fat, 1)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const run = db.transaction(() => { for (const f of SEED_FOODS) u.run(f); });
   run();
 }
