@@ -63,8 +63,9 @@ export const CAT_DEFAULT_G = { grain: 100, protein: 150, veg: 150, fat: 10 };
 export const DEFAULT_PORTIONS = 6;
 
 /* 今日打卡的初始值：全部归零，打开今日页不预填任何虚记
- * mealsLog 为核销事件流（每份在核销时刻锁定批次与营养）；satiety 当日饱腹感 1-5，0=未记 */
-export const DEFAULT_TODAY = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, mealsLog: [], satiety: 0 };
+ * mealsLog 为打卡事件流（每份在打卡时刻锁定批次与营养）；satiety 当日饱腹感 1-5，0=未记
+ * checkedIn 为一次性打卡标志（1=已确认、份数与库存已同批变动；0=待打卡），回撤后归零 */
+export const DEFAULT_TODAY = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, mealsLog: [], satiety: 0, checkedIn: 0 };
 
 /* 设置字段兜底默认（后端种子缺失时前端不至于 NaN） */
 export const SETTINGS_FALLBACK = {

@@ -12,5 +12,9 @@ export default defineConfig({
   build: {
     // SPEC 第 2 节：构建产物由 Express 静态托管，必须落到 backend/public（Express 只 serve 该目录）
     outDir: '../backend/public',
+    // outDir 落在 frontend 根目录之外，Vite 出于安全默认不会在构建前清空它，
+    // 导致每次构建只是新增一批带新哈希的产物、旧文件永久残留；
+    // 显式开启后既避免本地目录持续膨胀，也避免 Dockerfile 的 COPY backend/ ./ 把废弃产物带进运行时镜像
+    emptyOutDir: true,
   },
 })

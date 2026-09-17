@@ -20,7 +20,7 @@ function exportData() {
       db.prepare('SELECT * FROM day_logs ORDER BY date').all()
         .map((r) => [r.date, { meals: r.meals, whey: r.whey, breakfast: r.breakfast, late: r.late,
           consumed: r.consumed, perSnap: r.per_snap, batchName: r.batch_name,
-          mealsLog: r.meals_log, satiety: r.satiety }])
+          mealsLog: r.meals_log, satiety: r.satiety, checkedIn: r.checked_in }])
     ),
     weights: db.prepare('SELECT date, kg FROM weights ORDER BY date ASC').all(),
     rule_state: (() => {
@@ -34,6 +34,14 @@ function exportData() {
 router.get('/', wrap((req, res) => {
   res.json({ code: 0, data: exportData() });
 }));
+
+// 兼容旧备份：旧备份没有 checkedIn 键，若一律落 0（草稿），那些历史上有正餐记录的日期
+// 会变成"未打卡"，用户在界面上按新交互再点一次"打卡"就会对已扣过的份数二次扣减库存——
+// 正是本次改造要消灭的口径分叉。故缺失时按 meals > 0 推断，与 db.js 迁移回填同口径。
+// 显式带值（含显式 0）时不推断，尊重用户/新备份写入的草稿状态。
+function resolveCheckedIn(log) {
+  return log.checkedIn != null ? (Number(log.checkedIn) ? 1 : 0) : (Number(log.meals) > 0 ? 1 : 0);
+}
 
 // 各表"清空+重灌"写入器：字段从语义格式还原成 DB 列，全部显式列出防字段漂移
 function importWriters(data) {
@@ -61,16 +69,17 @@ function importWriters(data) {
     },
     day_logs: () => {
       const ins = db.prepare(`INSERT INTO day_logs
-        (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety, checked_in)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const [date, log] of Object.entries(data.day_logs)) {
         // 快照/事件流兼容三种来源：v2.2 备份（原文本）、手工编辑（对象）、旧备份（缺键）
         const snap = log.perSnap == null ? null
           : (typeof log.perSnap === 'string' ? log.perSnap : JSON.stringify(log.perSnap));
         const mlog = log.mealsLog == null ? null
           : (typeof log.mealsLog === 'string' ? log.mealsLog : JSON.stringify(log.mealsLog));
+        // checkedIn 见 resolveCheckedIn：显式值优先，旧备份按 meals 推断，防二次扣库存
         ins.run(date, log.meals, log.whey, log.breakfast, log.late, log.consumed,
-          snap, log.batchName || '', mlog, log.satiety || 0);
+          snap, log.batchName || '', mlog, log.satiety || 0, resolveCheckedIn(log));
       }
     },
     weights: () => {

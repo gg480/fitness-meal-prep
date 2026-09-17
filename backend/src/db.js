@@ -56,7 +56,8 @@ db.exec(`
     per_snap TEXT,                  -- 打卡时每份营养快照 JSON {kcal,p,c,f}（批次吃完回溯不失真）
     batch_name TEXT,                -- 打卡时批次名，供回溯卡片展示
     meals_log TEXT,                 -- v2.2: 核销事件流 JSON [{ts,batchId,batchName,per:{kcal,p,c,f}}]
-    satiety INTEGER NOT NULL DEFAULT 0  -- v2.2: 当日饱腹感 0=未记录，1-5 星
+    satiety INTEGER NOT NULL DEFAULT 0, -- v2.2: 当日饱腹感 0=未记录，1-5 星
+    checked_in INTEGER NOT NULL DEFAULT 0  -- 打卡确认标记：0=未确认(草稿)，1=已确认
   );
 
   CREATE TABLE IF NOT EXISTS weights (
@@ -71,7 +72,7 @@ db.exec(`
   );
 `);
 
-// 轻量迁移：老库 day_logs 缺 per_snap/batch_name/meals_log/satiety 列时补建
+// 轻量迁移：老库 day_logs 缺 per_snap/batch_name/meals_log/satiety/checked_in 列时补建
 // （CREATE TABLE IF NOT EXISTS 不会改已存在表）；旧数据 meals_log 为 NULL，
 // 前端 normDaylog 兜底空数组并按 per_snap 旧口径回溯展示
 function migrateDayLogsColumns() {
@@ -80,6 +81,15 @@ function migrateDayLogsColumns() {
   if (!cols.includes('batch_name')) db.exec('ALTER TABLE day_logs ADD COLUMN batch_name TEXT');
   if (!cols.includes('meals_log')) db.exec('ALTER TABLE day_logs ADD COLUMN meals_log TEXT');
   if (!cols.includes('satiety')) db.exec("ALTER TABLE day_logs ADD COLUMN satiety INTEGER NOT NULL DEFAULT 0");
+  // 打卡确认标记：新交互下份数与库存只在"打卡"这一个动作里同时变化，需要独立标记把
+  // 调份数的草稿态与已确认态分开，否则保存草稿就会被当成已打卡、回撤判断失去依据
+  if (!cols.includes('checked_in')) {
+    db.exec('ALTER TABLE day_logs ADD COLUMN checked_in INTEGER NOT NULL DEFAULT 0');
+    // 老数据回填：旧交互没有草稿态，"有正餐记录"就等于当天已打卡，故按 meals > 0 置 1。
+    // 不用 consumed > 0 判断，是因为旧设计下调份数不回补库存，consumed 会高于 meals（如 4/2），
+    // 按 consumed 回填会把只改过份数的草稿也当成已打卡
+    db.exec('UPDATE day_logs SET checked_in = 1 WHERE meals > 0');
+  }
 }
 migrateDayLogsColumns();
 

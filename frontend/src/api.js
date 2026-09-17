@@ -113,6 +113,11 @@ export async function consumePortions(n) {
   return req('POST', '/inventory/consume', { portions: n });
 }
 
+/* 回撤打卡：按批次把份数加回库存（与 consume 成对，保证库存与记录不分叉） */
+export async function restorePortions(items) {
+  return req('POST', '/inventory/restore', { items });
+}
+
 /* ===== 设置 / 打卡 / 体重 ===== */
 export async function fetchSettings() {
   return req('GET', '/settings');

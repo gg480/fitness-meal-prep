@@ -166,6 +166,54 @@ export function autoGenerate(selectedIds, days, profile, foods, locked = []) {
   return { error: false, items, portions: n, per, lockedProteinOver };
 }
 
+/* 微调一档的「每份」步进：自然单位优先（允许半单位的调料取半档），否则走类别步进 */
+function stepPerPortion(id, cat, foods) {
+  const nu = naturalOf(id);
+  if (nu) return nu.half ? nu.g / 2 : nu.g;
+  return { grain: 10, protein: 25, veg: 10, fat: 5 }[cat] || 10;
+}
+
+/* 克数 → 热量；食材库查不到按 0 计，避免 NaN 沿计算链路扩散 */
+function kcalOf(id, g, foods) {
+  const f = foods.find(x => x.id === id);
+  return f ? f.kcal * g / 100 : 0;
+}
+
+/* 微调某食材：按「每份一个自然单位」上下调一档，同类内其余未锚定食材按热量守恒自动补/退。
+ * 与 autoGenerate 的区别：只重算被调食材所属的那一类，绝不牵连其他类别 */
+export function adjustFoodByStep(items, targetId, dir, foods, anchors, portions) {
+  const f = foods.find(x => x.id === targetId);
+  if (!f) return { items: null, blocked: 'no-companion' };
+  // 步进按「每份」定义（用户点一下 = 每份增减一个自然单位），整锅实际加减要先乘份数
+  const step = stepPerPortion(targetId, f.cat, foods) * portions;
+  const g2 = Math.min(Math.max(items[targetId] + dir * step, step), 3000);
+  if (g2 === items[targetId]) return { items: null, blocked: dir < 0 ? 'min' : 'max' };
+
+  // 只取同类食材参与补偿：跨类补偿会打乱用户对其他类别的既定安排
+  const ids = Object.keys(items).filter(x => (foods.find(y => y.id === x) || {}).cat === f.cat);
+  // 为什么按「该类总热量」守恒而不是按碳水守恒：用户点 ↑↓ 的心理预期是"这一类热量不变"，
+  // 而同类食材的碳水密度差异极大（如玉米 22.8 vs 大米 77.9），按碳水守恒会算出不自然的克数；
+  // 热量是四类通用的统一尺度，故用它做守恒量
+  const E = ids.reduce((s, x) => s + kcalOf(x, items[x], foods), 0);
+  const Et1 = kcalOf(targetId, g2, foods);
+  const V = ids.filter(x => x !== targetId && anchors.indexOf(x) < 0);
+  if (!V.length) return { items: null, blocked: 'no-companion' };
+  const Ev0 = E - kcalOf(targetId, items[targetId], foods); // 可变集合调前总热量
+  if (Ev0 <= 0) return { items: null, blocked: 'no-companion' };
+
+  const k = (E - Et1) / Ev0; // 可变热量缩放系数：target 涨则同伴同比例退，总热量守住 E
+  const out = Object.assign({}, items); // 不修改入参，避免调用方工作区状态被就地篡改
+  out[targetId] = g2;
+  V.forEach(id => {
+    const vf = foods.find(x => x.id === id);
+    const gRaw = kcalOf(id, items[id], foods) * k / vf.kcal * 100;
+    const vStep = stepPerPortion(id, f.cat, foods) * portions;
+    // 取整/钳制会让热量不完全守恒，交给界面上的红黄绿校验兜底，不为此引入迭代
+    out[id] = Math.min(Math.max(roundUnit(id, gRaw, foods), vStep), 3000);
+  });
+  return { items: out, blocked: null };
+}
+
 export function genAdvice(daily, profile) {
   const dKcal = deviOf(daily.kcal, profile.kcal);
   const gap = profile.tdee - daily.kcal;
@@ -271,7 +319,7 @@ export function normExtras(v) {
 /* 归一化某天打卡：补默认份数、快照字段，加餐字段走 normExtras；
  * mealsLog 过滤缺营养的坏条目（v2.2 前的旧数据为空数组，回溯走 perSnap 旧口径） */
 export function normDaylog(log) {
-  const t = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, perSnap: null, batchName: '', mealsLog: [], satiety: 0 };
+  const t = { meals: 0, whey: 0, breakfast: [], late: [], consumed: 0, perSnap: null, batchName: '', mealsLog: [], satiety: 0, checkedIn: 0 };
   if (!log) return t;
   const ml = Array.isArray(log.mealsLog)
     ? log.mealsLog.filter(e => e && e.per && Number.isFinite(Number(e.per.kcal)))
@@ -286,6 +334,7 @@ export function normDaylog(log) {
     batchName: log.batchName || '',
     mealsLog: ml,
     satiety: Number(log.satiety) || 0,
+    checkedIn: log.checkedIn ? 1 : 0,
   };
 }
 

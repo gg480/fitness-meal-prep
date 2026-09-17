@@ -42,6 +42,10 @@ function assertLogBody(body) {
   if (Number(body.satiety) < 0 || Number(body.satiety) > 5) {
     throw new HttpError(400, 'satiety 必须为 0-5');
   }
+  // checkedIn 缺省视作 0（草稿）：旧客户端不传该字段，保存的只是待确认内容
+  if (body.checkedIn !== undefined && body.checkedIn !== null && ![0, 1].includes(Number(body.checkedIn))) {
+    throw new HttpError(400, 'checkedIn 必须为 0 或 1');
+  }
 }
 
 // per_snap 期望为 {kcal,p,c,f}，批 JSON 再存，非法则置空（前端会回退按配方估算）
@@ -73,6 +77,8 @@ const rowToLog = (row) => {
     breakfast: parse(row.breakfast), late: parse(row.late),
     consumed: row.consumed, perSnap: snap, batchName: row.batch_name || '',
     mealsLog, satiety: row.satiety || 0,
+    // 打卡确认标记：0=草稿（份数可改，库存未动），1=已打卡（份数与库存已同时落账）
+    checkedIn: row.checked_in ? 1 : 0,
   };
 };
 
@@ -84,20 +90,22 @@ router.get('/', wrap((req, res) => {
   res.json({ code: 0, data });
 }));
 
-// 当日打卡 upsert：重复保存同一天直接覆盖，符合"改了再存"的使用习惯
+// 当日打卡 upsert：重复保存同一天直接覆盖，符合"改了再存"的使用习惯。
+// checked_in 由前端随 body 一起提交：1=打卡（份数已进库存账），0=草稿/已回撤
 router.put('/:date', wrap((req, res) => {
   const date = req.params.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'date 格式应为 YYYY-MM-DD');
   const body = req.body || {};
   assertLogBody(body);
   db.prepare(`
-    INSERT INTO day_logs (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety)
-    VALUES (@date, @meals, @whey, @breakfast, @late, @consumed, @per_snap, @batch_name, @meals_log, @satiety)
+    INSERT INTO day_logs (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety, checked_in)
+    VALUES (@date, @meals, @whey, @breakfast, @late, @consumed, @per_snap, @batch_name, @meals_log, @satiety, @checked_in)
     ON CONFLICT(date) DO UPDATE SET
       meals = excluded.meals, whey = excluded.whey, breakfast = excluded.breakfast,
       late = excluded.late, consumed = excluded.consumed,
       per_snap = excluded.per_snap, batch_name = excluded.batch_name,
-      meals_log = excluded.meals_log, satiety = excluded.satiety
+      meals_log = excluded.meals_log, satiety = excluded.satiety,
+      checked_in = excluded.checked_in
   `).run({
     date,
     meals: Number(body.meals), whey: Number(body.whey),
@@ -106,6 +114,7 @@ router.put('/:date', wrap((req, res) => {
     per_snap: normalizeSnap(body.perSnap), batch_name: String(body.batchName || ''),
     meals_log: normalizeMealsLog(body.mealsLog),
     satiety: Math.max(0, Math.min(5, Number(body.satiety) || 0)),
+    checked_in: Number(body.checkedIn) ? 1 : 0,
   });
   res.json({ code: 0, data: { date, ...rowToLog(db.prepare('SELECT * FROM day_logs WHERE date = ?').get(date)) } });
 }));

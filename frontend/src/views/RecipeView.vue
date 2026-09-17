@@ -9,10 +9,11 @@ import {
 } from '../constants';
 import {
   calcTotals, perOf, dailyPreview, autoGenerate, genAdvice,
-  autoRecipeName
+  autoRecipeName, adjustFoodByStep
 } from '../utils';
 import Stepper from '../components/Stepper.vue';
 import FoodRow from '../components/FoodRow.vue';
+import PickedRow from '../components/PickedRow.vue';
 import CustomFoodForm from '../components/CustomFoodForm.vue';
 import RecipeLibBar from '../components/RecipeLibBar.vue';
 import NutrientTiles from '../components/NutrientTiles.vue';
@@ -21,6 +22,8 @@ import GapRow from '../components/GapRow.vue';
 
 const recipeName = ref('');
 const forceChk = ref(false);
+const pickerOpen = ref(false);      // 食材库弹层开关（左栏只留配方结构，食材库按需调出）
+const pickerCat = ref('grain');     // 打开弹层时记住被点的类别，兼作弹层标题
 
 /* 下锅直觉顺序：主食 → 蛋白 → 蔬菜 → 油脂 → 自定义 */
 const visibleFoods = computed(() => {
@@ -42,7 +45,9 @@ function toggleFood(id) {
   const f = foodById(id);
   if (!f) return;
   if (store.recipe.items[id] != null) delete store.recipe.items[id];
-  else store.recipe.items[id] = CAT_DEFAULT_G[f.cat];
+  // CAT_DEFAULT_G 是「每份」默认克数，而 items 存的是整锅克数，必须乘份数：
+  // 不乘会让多份配方里新加入的食材只有一份的量（6 份配方点红薯只给 100g，每份 16.7g 无法使用）
+  else store.recipe.items[id] = CAT_DEFAULT_G[f.cat] * store.recipe.portions;
 }
 
 /* 取消所有选择：清空配方食材，同时作废称重进度（防残留称重记录） */
@@ -52,19 +57,65 @@ function clearAll() {
   toast('已取消所有食材选择');
 }
 
-/* 克重输入两阶段：input 即时汇总，change 空值回退分类默认 */
-function onGrams({ id, value, phase }) {
-  const v = parseInt(value, 10);
-  if (phase === 'input') {
-    if (!v || v <= 0) return; // 输入过程中的空值/0 不立即生效
-    store.recipe.items[id] = Math.min(v, 3000);
+/* 微调被拒的提示文案：算法只回 blocked 类型，翻成人话属界面职责 */
+const BLOCKED_TEXT = {
+  min: '已到最小克数',
+  max: '已到最大克数',
+  'no-companion': '该类没有其他可变食材可以自动补齐，请先解锁同伴食材'
+};
+
+/* 一档微调：算法按同类热量守恒补/退同伴克数。
+ * 调过的食材代表用户已认可的量，立即锚定，后续补偿不再动它 */
+function stepFood(id, dir) {
+  const locked = store.recipe.locked || (store.recipe.locked = []);
+  const res = adjustFoodByStep(store.recipe.items, id, dir, store.foods, locked, store.recipe.portions);
+  if (res.blocked) {
+    toast(BLOCKED_TEXT[res.blocked] || '无法微调');
     return;
   }
-  const f = foodById(id);
-  let n = v;
-  if (!n || n < 1) n = CAT_DEFAULT_G[f.cat]; // 失焦空值回退，不静默移除食材
-  store.recipe.items[id] = Math.min(n, 3000);
+  store.recipe.items = res.items;
+  if (!locked.includes(id)) locked.push(id);
 }
+
+/* 已选行移除：同步清理称重记录，避免厨房页留下无主称重项 */
+function removeFood(id) {
+  delete store.recipe.items[id];
+  pruneWeigh();
+}
+
+/* 左栏分组：按类别聚合已选食材，顺序沿用 CATS（下锅直觉顺序）；
+ * 「自定义」组仅在确有该类食材时出现，不空占版面 */
+const groups = computed(() => CATS
+  .filter(c => c.key !== 'all')
+  .map(c => ({
+    key: c.key,
+    label: c.label,
+    rows: Object.keys(store.recipe.items)
+      .map(id => ({ id, food: foodById(id), grams: store.recipe.items[id] }))
+      .filter(r => r.food && r.food.cat === c.key)
+      .sort((a, b) => a.food.name.localeCompare(b.food.name, 'zh'))
+  }))
+  .filter(g => g.key !== 'custom' || g.rows.length));
+
+const pickedCount = computed(() => Object.keys(store.recipe.items).length);
+
+/* 弹层打开：记住被点的类别并清空上次搜索词，让列表默认筛到该类 */
+function openPicker(cat) {
+  store.cat = cat;
+  pickerCat.value = cat;
+  store.q = '';
+  pickerOpen.value = true;
+}
+
+function closePicker() { pickerOpen.value = false; }
+
+/* 弹层内切类别：标题同步更新，避免出现「标题写主食、列表却是蛋白」的错位 */
+function selectCat(key) {
+  store.cat = key;
+  pickerCat.value = key;
+}
+
+const pickerLabel = computed(() => (CATS.find(c => c.key === pickerCat.value) || {}).label || '');
 
 async function submitCustomFood(payload) {
   if (!payload.valid) {
@@ -78,6 +129,7 @@ async function submitCustomFood(payload) {
     });
     store.foods = await api.fetchFoods();
     store.cat = 'custom';
+    pickerCat.value = 'custom'; // 弹层标题跟随筛选切到自定义，避免标题与列表不一致
     store.q = '';
     toast('自定义食材「' + payload.name + '」已加入');
   } catch (err) {
@@ -269,29 +321,57 @@ async function goCook() {
         @update:name="recipeName = $event" @save="saveRecipeToLib" @save-as="saveAsNew"
         @load="loadRecipe" @delete="deleteRecipeFromLib" />
 
-      <div class="tabs">
-        <button v-for="c in CATS" :key="c.key" class="tab" type="button"
-          :class="{ on: store.cat === c.key }" @click="store.cat = c.key">{{ c.label }}</button>
-      </div>
-
-      <input class="search" type="search" placeholder="搜索食材…" autocomplete="off"
-        :value="store.q" @input="store.q = $event.target.value">
-
       <div class="list-head">
-        <span class="list-head-tip">{{ Object.keys(store.recipe.items).length }} 种已选</span>
-        <button v-if="Object.keys(store.recipe.items).length" class="btn ghost sm clear-all" type="button" @click="clearAll">取消所有选择</button>
+        <span class="list-head-tip">{{ pickedCount }} 种已选</span>
+        <button v-if="pickedCount" class="btn ghost sm clear-all" type="button" @click="clearAll">取消所有选择</button>
       </div>
 
-      <div class="food-list">
-        <div v-if="!visibleFoods.length" class="empty">
-          <span>没有匹配的食材，换个关键词试试</span>
-        </div>
-        <FoodRow v-for="f in visibleFoods" :key="f.id" :food="f" :grams="store.recipe.items[f.id] ?? null"
-          :locked="(store.recipe.locked || []).includes(f.id)"
-          @toggle="toggleFood" @grams="onGrams" @delete-food="removeCustomFood" @lock="toggleLock" />
+      <div class="recipe-groups">
+        <section v-for="g in groups" :key="g.key" class="food-group">
+          <div class="group-head">
+            <span class="group-name">{{ g.label }}</span>
+            <span v-if="g.rows.length" class="group-count mono">{{ g.rows.length }}</span>
+            <button class="btn ghost sm group-add" type="button" @click="openPicker(g.key)">＋ 添加</button>
+          </div>
+          <PickedRow v-for="r in g.rows" :key="r.id" :food="r.food" :grams="r.grams"
+            :locked="(store.recipe.locked || []).includes(r.id)" :portions="store.recipe.portions"
+            @step="stepFood(r.id, $event)" @lock="toggleLock(r.id)" @remove="removeFood(r.id)" />
+          <div v-if="!g.rows.length" class="group-empty">暂无，点「＋ 添加」</div>
+        </section>
       </div>
 
-      <CustomFoodForm @submit-food="submitCustomFood" />
+      <!-- 食材库弹层：左栏常驻配方结构，挑食材时才按需调出（默认筛到被点的类别） -->
+      <div v-if="pickerOpen" class="picker-mask" @click.self="closePicker">
+        <section class="picker" role="dialog" aria-modal="true" aria-label="食材库">
+          <header class="picker-head">
+            <h3>添加食材<span class="picker-cat">{{ pickerLabel }}</span></h3>
+            <button class="btn primary sm" type="button" @click="closePicker">完成</button>
+          </header>
+
+          <div class="picker-body">
+            <div class="tabs">
+              <button v-for="c in CATS" :key="c.key" class="tab" type="button"
+                :class="{ on: store.cat === c.key }" @click="selectCat(c.key)">{{ c.label }}</button>
+            </div>
+
+            <input class="search" type="search" placeholder="搜索食材…" autocomplete="off"
+              :value="store.q" @input="store.q = $event.target.value">
+
+            <div class="picker-list">
+              <div v-if="!visibleFoods.length" class="empty">
+                <span>没有匹配的食材，换个关键词试试</span>
+              </div>
+              <FoodRow v-for="f in visibleFoods" :key="f.id" :food="f" :grams="store.recipe.items[f.id] ?? null"
+                :locked="(store.recipe.locked || []).includes(f.id)" pick-only
+                @toggle="toggleFood" @delete-food="removeCustomFood" />
+            </div>
+          </div>
+
+          <footer class="picker-foot">
+            <CustomFoodForm @submit-food="submitCustomFood" />
+          </footer>
+        </section>
+      </div>
     </div>
 
     <aside class="summary">
