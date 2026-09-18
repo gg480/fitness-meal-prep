@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { wrap, HttpError, calcRecipeTotals } from '../helpers.js';
+import { wrap, HttpError, calcRecipeTotals, parseMealAllocation, normalizeMealAllocation } from '../helpers.js';
 
 const router = Router();
 
@@ -51,6 +51,8 @@ function buildRecipe(row) {
     portions: row.portions,
     items,
     locked: JSON.parse(row.locked || '[]'),  // 老库迁移后 locked 恒有值，兜底解析以防脏数据
+    // 老行 meal_allocation 由 DEFAULT '{}' 补齐，解析结果天然是"未分包"，无需回填数据
+    mealAllocation: parseMealAllocation(row.meal_allocation),
     totals: calcRecipeTotals(items),
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -69,8 +71,10 @@ router.get('/:id', wrap((req, res) => {
 router.post('/', wrap((req, res) => {
   assertRecipeBody(req.body);
   const locked = req.body.locked ?? [];  // 缺省全可变，存空数组
-  const result = db.prepare('INSERT INTO recipes (name, portions, items, locked) VALUES (?, ?, ?, ?)')
-    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), JSON.stringify(locked));
+  // mealAllocation 缺省 = 未分包（{}），旧客户端不传也能保存；校验由 normalize 内部完成
+  const allocation = normalizeMealAllocation(req.body.mealAllocation ?? {}, Number(req.body.portions), true);
+  const result = db.prepare('INSERT INTO recipes (name, portions, items, locked, meal_allocation) VALUES (?, ?, ?, ?, ?)')
+    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), JSON.stringify(locked), allocation);
   res.status(201).json({ code: 0, data: buildRecipe(findRecipe(result.lastInsertRowid)) });
 }));
 
@@ -78,8 +82,13 @@ router.put('/:id', wrap((req, res) => {
   const row = findRecipe(req.params.id);
   assertRecipeBody(req.body);
   const locked = req.body.locked ?? JSON.parse(row.locked || '[]');  // 未传则保留原锁定，避免误清空
-  db.prepare("UPDATE recipes SET name = ?, portions = ?, items = ?, locked = ?, updated_at = datetime('now','localtime') WHERE id = ?")
-    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), JSON.stringify(locked), row.id);
+  // 未传则保留原分包（与 locked 同构）：旧客户端一次 PUT 不该把分包清掉
+  const allocation = normalizeMealAllocation(
+    req.body.mealAllocation ?? parseMealAllocation(row.meal_allocation),
+    Number(req.body.portions), true
+  );
+  db.prepare("UPDATE recipes SET name = ?, portions = ?, items = ?, locked = ?, meal_allocation = ?, updated_at = datetime('now','localtime') WHERE id = ?")
+    .run(req.body.name.trim(), Number(req.body.portions), normalizeItems(req.body.items), JSON.stringify(locked), allocation, row.id);
   res.json({ code: 0, data: buildRecipe(findRecipe(row.id)) });
 }));
 

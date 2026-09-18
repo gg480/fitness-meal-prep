@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { seedIfEmpty, ensurePresetFoods } from './seed.js';
+import { seedIfEmpty, ensurePresetFoods, backfillPresetNatures, backfillPresetGis, backfillPresetCookedWeights, backfillPresetCorrections, backfillPresetFromSeed, backfillRecipeNameFromSeed, backfillRecipeItemsFromSeed, backfillMealLogBatchNames, migrateCalcModeOnce } from './seed.js';
 
 // 数据库文件统一放在 DATA_DIR（Docker 卷挂载点），首次运行目录可能不存在
 const dataDir = process.env.DATA_DIR || './data';
@@ -19,6 +19,9 @@ db.exec(`
     category TEXT NOT NULL,         -- 'grain'|'protein'|'veg'|'fat'|'custom'
     unit TEXT NOT NULL,             -- '干重'|'生重'|'克重'
     kcal REAL NOT NULL, protein REAL NOT NULL, carbs REAL NOT NULL, fat REAL NOT NULL,
+    nature TEXT NOT NULL DEFAULT 'other', -- T-113 食物性质（瘦肉/高脂肉/糖油混合物…），未标注=other 不提示
+    gi TEXT,                        -- T-120 碳水第二属性：high|mid|low，NULL = 未标注（不提示）；只提示不参与计算
+    cookedWeight TEXT NOT NULL DEFAULT 'na', -- T-120 生熟口径：raw|dry|cooked|na，na=不分生熟（油脂调料/旧数据）
     is_preset INTEGER NOT NULL DEFAULT 0   -- 预设不可删，自定义可增删
   );
 
@@ -28,6 +31,7 @@ db.exec(`
     portions INTEGER NOT NULL,
     items TEXT NOT NULL,            -- JSON: {"rice":510,"pork_loin":500,...}
     locked TEXT NOT NULL DEFAULT '[]', -- v2.1 R4: JSON id 数组，锁定食材自动搭配中克数不变
+    meal_allocation TEXT NOT NULL DEFAULT '{}', -- T-102 契约 §4.3: 餐次分包 JSON {"breakfast":1.2,...}，'{}'=未分包
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
@@ -38,7 +42,8 @@ db.exec(`
     portions REAL NOT NULL,
     in_at TEXT NOT NULL,            -- 'MM-DD HH:mm'
     per_kcal REAL NOT NULL, per_p REAL NOT NULL, per_c REAL NOT NULL, per_f REAL NOT NULL,
-    items TEXT                      -- v2.2: 整锅食材克重 JSON {"rice":510,...}，锅位队列展示用
+    items TEXT,                     -- v2.2: 整锅食材克重 JSON {"rice":510,...}，锅位队列展示用
+    meal_allocation TEXT            -- T-102 契约 §4.4: 各餐次剩余份数 JSON；NULL=未分包批次（旧数据态）
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -48,7 +53,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS day_logs (
     date TEXT PRIMARY KEY,          -- 'YYYY-MM-DD'
-    meals INTEGER NOT NULL,         -- 正餐份数 0-4
+    meals REAL NOT NULL,            -- 份数 0-8，最多 1 位小数（T-111：吃多少盛多少，1.2 / 2.4 均合法）
     whey INTEGER NOT NULL,          -- 蛋白粉勺数 0-6
     breakfast TEXT NOT NULL,        -- 加餐条目数组 JSON [{"id","g"}]（旧值字符串 id 由前端归一化）
     late TEXT NOT NULL,             -- 同上，晚加餐条目数组
@@ -57,12 +62,27 @@ db.exec(`
     batch_name TEXT,                -- 打卡时批次名，供回溯卡片展示
     meals_log TEXT,                 -- v2.2: 核销事件流 JSON [{ts,batchId,batchName,per:{kcal,p,c,f}}]
     satiety INTEGER NOT NULL DEFAULT 0, -- v2.2: 当日饱腹感 0=未记录，1-5 星
-    checked_in INTEGER NOT NULL DEFAULT 0  -- 打卡确认标记：0=未确认(草稿)，1=已确认
+    checked_in INTEGER NOT NULL DEFAULT 0, -- 打卡确认标记：0=未确认(草稿)，1=已确认
+    day_type TEXT,                  -- T-126 当日登记的日类型 train|rest|none，NULL=未登记（回退 settings.dayType）
+    outing TEXT                     -- T-129 当日外食/喝酒记录 JSON {type,level,baijiu,beer,slot}，NULL=未登记
   );
 
   CREATE TABLE IF NOT EXISTS weights (
     date TEXT PRIMARY KEY,
     kg REAL NOT NULL
+  );
+
+  -- T-114 有氧记录：一天可有多条（早晚各一次），故用自增 id 而不是以日期为主键。
+  -- date 由前端传浏览器本地日期（容器为 UTC，服务端自己的"今天"会差一天）；
+  -- minutes 是单次分钟数，kcal 一律由前端按「心率公式 × 体重」现算，库里不存派生值，
+  -- 否则用户改了体重或静息心率后，历史记录会停在旧体重算出的消耗上
+  CREATE TABLE IF NOT EXISTS cardio_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,                  -- 'YYYY-MM-DD'
+    minutes REAL NOT NULL,               -- 单次时长（分钟）
+    hr INTEGER,                          -- 运动心率（可选）；NULL = 按推荐强度 120 估算
+    form TEXT NOT NULL DEFAULT 'other',  -- 有氧形式：walk/run/dance/swim/bike/other（与 seed.js CARDIO_FORMS 同口径）
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
 
   CREATE TABLE IF NOT EXISTS rule_state (
@@ -90,6 +110,13 @@ function migrateDayLogsColumns() {
     // 按 consumed 回填会把只改过份数的草稿也当成已打卡
     db.exec('UPDATE day_logs SET checked_in = 1 WHERE meals > 0');
   }
+  // T-126 当日日类型登记：不加 DEFAULT 也不回填 —— 「未登记」必须与「登记为某值」区分开，
+  // 计算层据此回退 settings.dayType（设置里那个降级为「默认日类型」）。
+  // 老库整列补成 NULL 即天然是「未登记」，行为与改造前一致，无需猜测历史数据
+  if (!cols.includes('day_type')) db.exec('ALTER TABLE day_logs ADD COLUMN day_type TEXT');
+  // T-129 外食/喝酒记录：不加 DEFAULT 也不回填 —— 「未登记」必须与「登记了一顿」区分开，
+  // 老库整列补成 NULL 即天然是未登记，行为与改造前逐字段一致（各餐目标完全按原结构走）
+  if (!cols.includes('outing')) db.exec('ALTER TABLE day_logs ADD COLUMN outing TEXT');
 }
 migrateDayLogsColumns();
 
@@ -97,6 +124,12 @@ migrateDayLogsColumns();
 function migrateInventoryColumns() {
   const cols = db.prepare('PRAGMA table_info(inventory)').all().map(c => c.name);
   if (!cols.includes('items')) db.exec('ALTER TABLE inventory ADD COLUMN items TEXT');
+  // T-106：必须可空。NULL = 未分包批次（份数可被任意餐次取用），与非 NULL 的"已分包"语义相反，
+  // 合并成一个值会让 consume 无法区分「旧批次可自由取用」和「新批次已分光」。旧数据不做回填：
+  // 餐次归属在旧数据里根本不存在，任何回填都只能编造且不可逆（契约 §4.7）
+  if (!cols.includes('meal_allocation')) {
+    db.exec('ALTER TABLE inventory ADD COLUMN meal_allocation TEXT');
+  }
 }
 migrateInventoryColumns();
 
@@ -105,8 +138,38 @@ migrateInventoryColumns();
 function migrateRecipesColumns() {
   const cols = db.prepare('PRAGMA table_info(recipes)').all().map(c => c.name);
   if (!cols.includes('locked')) db.exec('ALTER TABLE recipes ADD COLUMN locked TEXT NOT NULL DEFAULT \'[]\'');
+  // T-106：餐次分包映射。DEFAULT '{}' 让旧配方被 ALTER 自动补成"未分包"，无需任何数据回填
+  if (!cols.includes('meal_allocation')) {
+    db.exec('ALTER TABLE recipes ADD COLUMN meal_allocation TEXT NOT NULL DEFAULT \'{}\'');
+  }
 }
 migrateRecipesColumns();
+
+// 老库 foods 缺 nature 列时补建（CREATE TABLE IF NOT EXISTS 不会改已存在表）。
+// NOT NULL DEFAULT 'other' 让 ALTER 自动给全部旧行兜默认值 —— 未标注=不提示不拦截，
+// 故无需在迁移里猜测旧数据性质；预设食材的正式标注由 backfillPresetNatures 在种子之后回填
+function migrateFoodsColumns() {
+  const cols = db.prepare('PRAGMA table_info(foods)').all().map(c => c.name);
+  if (!cols.includes('nature')) {
+    db.exec("ALTER TABLE foods ADD COLUMN nature TEXT NOT NULL DEFAULT 'other'");
+  }
+  // T-120：gi 可空 —— NULL 就是「未标注」，GI 没有「其他」这种兜底档，不需要哨兵值。
+  // 不设 DEFAULT 是为了让「老库补列」与「新库建表」都停在 NULL，语义只有一种
+  if (!cols.includes('gi')) {
+    db.exec('ALTER TABLE foods ADD COLUMN gi TEXT');
+  }
+  // T-120：生熟口径必须有值（前端按枚举判断是否提示），故 NOT NULL DEFAULT 'na'。
+  // 旧行兜成 'na' = 不分生熟 = 不提示，行为与改造前完全一致；预设的正式标注由
+  // backfillPresetCookedWeights 在种子之后回填（'na' 与「未回填」同形，故回填条件带上 'na'）
+  if (!cols.includes('cookedWeight')) {
+    db.exec("ALTER TABLE foods ADD COLUMN cookedWeight TEXT NOT NULL DEFAULT 'na'");
+  }
+}
+migrateFoodsColumns();
+
+// T-114 的 cardio_logs 是全新表，没有历史 schema 需要改写：老库启动时由上面的
+// CREATE TABLE IF NOT EXISTS 直接补建，重复启动不重建，本身就是幂等迁移，故不需要 migrateXxxColumns。
+// 静息心率是唯一进入有氧消耗公式的个人参数，靠下面的 ensureSettingsKeys 补键（老库不覆盖用户值）。
 
 // 老库升级：R5 在 seedIfEmpty 后才引入 targetWeight/weeklyRate/weightTrack，
 // 已有 settings 表不会补键（seedIfEmpty 只在 foods 空时跑）。此处对缺失键幂等补齐，
@@ -114,6 +177,31 @@ migrateRecipesColumns();
 function ensureSettingsKeys() {
   const defaults = {
     targetWeight: 80, weeklyRate: 0.5, weightTrack: false,
+    // T-103 配额模式七键（契约 §1.7）：与 seed DEFAULT_SETTINGS / SETTINGS_FALLBACK 同口径，
+    // 老库靠这里的 INSERT OR IGNORE 补键，绝不覆盖用户改过的值。
+    // calcMode 默认 'quota'（T-122 切口径）；已有库里已存的 calcMode 由 INSERT OR IGNORE / has 判断跳过，
+    // 用户显式选过的值不会被静默覆盖，要换口径由用户在设置页自己切一次
+    calcMode: 'quota', phase: 'cut', dayType: 'none',
+    trainSlot: 'before_dinner', carbStage: 'early', carbPer: null, fatPer: null,
+    // T-114 有氧置换：静息心率（次/分），公式「活动心率 ÷ 静息心率 × 6.4 − 6.2」的唯一个人参数。
+    // 官方 Excel 第 16 表覆盖 60–80，默认取中点 70；越界值会让置换出的碳水量离谱
+    restingHr: 70,
+    // T-124 腰围（cm，选填）：规则引擎「向心性肥胖」判定用，null = 未填（该条不触发）。
+    // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
+    waist: null,
+    // T-125 每天正餐份数（1–6 整数），默认 2 = 历史基线。老库靠 INSERT OR IGNORE 补键，不覆盖用户值。
+    // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
+    mealsPerDay: 2,
+    // T-126 关闭的餐次（吃不到的场合，如「零食/夜宵」）。数组元素是 MEAL_SLOTS 里的餐次名，
+    // [] = 六餐全开（历史行为）。关闭后其配额按比例归一化给其余餐次，与 seed / 前端同口径
+    mealSlotsOff: [],
+    // T-126 上次重算配额时的体重（kg），null = 从未重算 → 规则引擎的提醒基准退回首条体重记录。
+    // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
+    lastRecalcWeight: null,
+    // T-131 calcMode 一次性迁移标记：false = 尚未迁移。老库补这个键时是 false，
+    // 随后由 migrateCalcModeOnce 决定是否把旧默认值 'tdee' 迁到 'quota' 并把标记置 true。
+    // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
+    migratedCalcModeQuota: false,
   };
   const has = db.prepare('SELECT 1 AS n FROM settings WHERE key = ?');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
@@ -127,5 +215,32 @@ seedIfEmpty(db);
 // 老库升级：seedIfEmpty 对已存在的库会跳过，此处幂等补齐 R5 三键（serve 老库迁移场景）。
 // 已存在键由 INSERT OR IGNORE 跳过、不覆盖用户改过的值
 ensureSettingsKeys();
+// T-131 一次性迁移：calcMode 的默认值已由 'tdee' 改为 'quota'，但上面刻意「不覆盖已保存的值」，
+// 于是老库一直跑在 TDEE 派上。这里把「恰好等于旧默认值」的库迁一次（标记置 true 后不再覆盖用户选择），
+// 必须排在 ensureSettingsKeys 之后：迁移标记键要先存在，且 calcMode 键缺省时已被补成 'quota'
+migrateCalcModeOnce(db);
 // 老库升级：确保所有预设食材（含新二开 milk）幂等补齐，不重复不覆盖
 ensurePresetFoods(db);
+// 老库升级：预设食材的 nature 回填（只补仍是默认 'other' 的预设行），幂等且不覆盖已改过的值
+backfillPresetNatures(db);
+// 老库升级：预设食材的 gi / cookedWeight 回填（T-120），同样只补未标注的预设行，幂等且不覆盖用户值
+backfillPresetGis(db);
+backfillPresetCookedWeights(db);
+// 老库升级：T-128 权威数据校准（黑米 GI 改低、南瓜改主食+高 GI、玉米与红薯品名对齐）。
+// 上面两个 backfill 只填空值，改不了已有值，故这步单独处理「改值」的场景，同样只动预设行
+backfillPresetCorrections(db);
+// 老库升级（T-130）：早期写入把预设食材的非 ASCII 文本写成了字面 '?'（name / unit 两列各 30+ 行），
+// 上面的步骤都没有「改已有坏值」的能力，故这里以种子为准逐字段重写 is_preset = 1 的整行
+// （name/category/unit/数值字段/nature/gi/cookedWeight），自定义食材不碰；无差异不落写，幂等
+backfillPresetFromSeed(db);
+// 老库升级（T-131）：同一次坏写入留下的两处「用户可改字段」的脏值 —— recipes.name 与
+// day_logs.meals_log 事件里的 batchName，都被写成了字面 '?'。这两处不能像预设食材那样
+// 「以种子为准」，故各自带足条件（id + 名字形状 + items 与种子一致 / 事件级匹配）后再动手，
+// 宁可不修也不能改错用户数据；两项都是先比对后写、无差异不落 UPDATE
+backfillRecipeNameFromSeed(db);
+// 老库升级（T-132）：默认配方的克数停在 T-124 之前的固定形态（INSERT OR IGNORE 不会更新已存在的行），
+// 表现为老库打开配方页仍是四项黄红 —— 上面所有步骤都改不到它，故在这里按种子重写 items。
+// 必须排在 backfillRecipeNameFromSeed 之后：条件②要求配方名已是种子默认名（T-131 刚把它从 '?' 还原）。
+// 条件不满足（id≠1 / 名字被用户改过 / items 不是种子形态）时一个字都不动
+backfillRecipeItemsFromSeed(db);
+backfillMealLogBatchNames(db);

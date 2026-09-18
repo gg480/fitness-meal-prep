@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { wrap, HttpError } from '../helpers.js';
+import { NATURE_KEYS, GI_KEYS, COOKED_WEIGHT_KEYS } from '../seed.js';
 import { setGlobalDispatcher, EnvHttpProxyAgent } from 'undici';
 
 // 在线搜索需出外网：若部署机配置了 HTTPS_PROXY/HTTP_PROXY（如本机 7897），让 fetch 走代理。
@@ -31,6 +32,33 @@ function assertFoodBody(body) {
   }
 }
 
+// 性质归一（T-113）：字段可选 —— 省略/空串按 'other' 落库（未标注 = 前端不提示不拦截），
+// 老客户端与在线搜索结果不必感知这个字段；但一旦传了就必须在枚举内，
+// 否则前端 NATURE_LABEL 查不到标签，排除清单提示会渲染成空白
+function normalizeNature(v) {
+  if (v === undefined || v === null || v === '') return 'other';
+  if (!NATURE_KEYS.includes(v)) throw new HttpError(400, 'nature 必须为：' + NATURE_KEYS.join(' / '));
+  return v;
+}
+
+// GI 归一（T-120）：同样是可选字段，省略/空串按 NULL 落库（未标注 = 前端不提示）。
+// 只收 high/mid/low 三档，不收数值 —— 方法论的 GI 清单就是三档，收数值会造出一个并不精确的数据源
+function normalizeGi(v) {
+  if (v === undefined || v === null || v === '') return null;
+  if (!GI_KEYS.includes(v)) throw new HttpError(400, 'gi 必须为：' + GI_KEYS.join(' / '));
+  return v;
+}
+
+// 生熟口径归一（T-120）：列 NOT NULL，故省略/空串落 'na'（不分生熟 = 不提示）。
+// 一旦传了就必须在枚举内，否则前端口径提示会按未知值静默不显示，用户以为标了其实没标
+function normalizeCookedWeight(v) {
+  if (v === undefined || v === null || v === '') return 'na';
+  if (!COOKED_WEIGHT_KEYS.includes(v)) {
+    throw new HttpError(400, 'cookedWeight 必须为：' + COOKED_WEIGHT_KEYS.join(' / '));
+  }
+  return v;
+}
+
 router.get('/', wrap((req, res) => {
   const rows = db.prepare(`SELECT * FROM foods ORDER BY ${CATEGORY_SORT}`).all();
   res.json({ code: 0, data: rows });
@@ -50,11 +78,14 @@ router.post('/', wrap((req, res) => {
     unit: body.unit.trim(),
     kcal: Number(body.kcal), protein: Number(body.protein),
     carbs: Number(body.carbs), fat: Number(body.fat),
+    nature: normalizeNature(body.nature),
+    gi: normalizeGi(body.gi),
+    cookedWeight: normalizeCookedWeight(body.cookedWeight),
     is_preset: 0,
   };
   db.prepare(`
-    INSERT INTO foods (id, name, category, unit, kcal, protein, carbs, fat, is_preset)
-    VALUES (@id, @name, @category, @unit, @kcal, @protein, @carbs, @fat, @is_preset)
+    INSERT INTO foods (id, name, category, unit, kcal, protein, carbs, fat, nature, gi, cookedWeight, is_preset)
+    VALUES (@id, @name, @category, @unit, @kcal, @protein, @carbs, @fat, @nature, @gi, @cookedWeight, @is_preset)
   `).run(food);
   res.status(201).json({ code: 0, data: food });
 }));
@@ -128,6 +159,13 @@ router.get('/search-online', wrap(async (req, res) => {
         p: Math.round((Number(nu.proteins) || 0) * 10) / 10,
         c: Math.round((Number(nu.carbohydrates) || 0) * 10) / 10,
         f: Math.round((Number(nu.fat) || 0) * 10) / 10,
+        // 性质留空：上游只有营养值，判断不了瘦肉/高脂肉（那要看部位与做法），
+        // 由用户在表单里自己选，空值统一落 'other'
+        nature: '',
+        // T-120 同理留空：上游给不出 GI 档位，也说不清营养值是生重还是熟重口径
+        // （同一包装食品标熟重还是生重差别很大），空值由表单按类别兜默认
+        gi: '',
+        cookedWeight: '',
       };
       if (!item.kcal && item.p === 0 && item.c === 0 && item.f === 0) return null;
       return Object.assign(item, { cat: inferCategory(item) });

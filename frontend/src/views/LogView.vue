@@ -1,10 +1,11 @@
 <script setup>
 /* 记录页（F6）：体重录入、SVG 曲线（细线每日 + 粗线 7 日均线）、规则引擎卡、每日饮食回溯 */
 import { computed, ref } from 'vue';
-import { store, profile, latestPer, foodById } from '../store';
+import { store, profile, latestPer, foodById, SLOT_LABEL } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { maAt, dateKey, normDaylog, dayIntake, deviOf, statusOf, pctText, round1, qtyText, naturalOf, summarizeMealsLog, macroRatio } from '../utils';
+import { maAt, dateKey, normDaylog, dayIntake, deviOf, statusOf, pctText, round1, qtyText, naturalOf, macroRatio, fmtQty, outingNutri, outingUnits } from '../utils';
+import { OUTING_TYPES, OUTING_LEVELS } from '../constants';
 import RuleCard from '../components/RuleCard.vue';
 
 const weightInput = ref('');
@@ -45,10 +46,10 @@ function renderChart(ws) {
 
 const maRead = computed(() => {
   const ws = store.weights, n = ws.length;
-  if (n < 8) return '均线将在第 7 条记录后显示';
+  if (n < 8) return '均线将在第 7 条记录后显示（仅作体重趋势展示，不参与规则判定）';
   const maNow = maAt(ws, n - 1), ma7 = maAt(ws, n - 8);
   return '7 日均线 ' + maNow.toFixed(2) + ' kg · 7 天前 ' + ma7.toFixed(2) +
-    ' kg · 周降幅 ' + (ma7 - maNow).toFixed(2) + ' kg';
+    ' kg · 周降幅 ' + (ma7 - maNow).toFixed(2) + ' kg（仅展示，规则判定看下方窗口首末两条）';
 });
 
 async function addWeight() {
@@ -63,6 +64,30 @@ async function addWeight() {
   }
 }
 
+/* 核销明细按「锅 + 餐次」聚合（T-109）：分包后同一锅各餐份数不等，
+ * 只按锅聚合就看不出哪几份是早饭、哪几份是练后餐。
+ * utils.summarizeMealsLog 没有餐次维度，而本 Sprint 该文件被契约冻结，故在此按 slot 再聚合一次 */
+function groupPots(log) {
+  const order = [], map = {};
+  (log.mealsLog || []).forEach(e => {
+    const name = e.batchName || '未命名锅';
+    const slot = e.slot || '';
+    const key = name + '|' + slot;
+    if (!map[key]) {
+      map[key] = {
+        key, batchName: name,
+        slotLabel: slot ? (SLOT_LABEL[slot] || slot) : '未标餐次',
+        count: 0, kcal: 0
+      };
+      order.push(key);
+    }
+    // 份数按事件记录的 portions 累加：分包是小数份时一份实物可能拆成多条事件
+    map[key].count = round1(map[key].count + (Number(e.portions) || 1));
+    map[key].kcal += Number(e.per.kcal) || 0;
+  });
+  return order.map(k => map[k]);
+}
+
 /* 每日饮食回溯：按天倒序卡片，展示正餐(哪几锅各几份)/蛋白粉/加餐摄入与目标对比，
  * 附碳蛋脂供能比与达标判定（|kcal−目标|≤10% 记达标） */
 const weekCn = ['日', '一', '二', '三', '四', '五', '六'];
@@ -74,7 +99,7 @@ const dietHistory = computed(() => Object.keys(store.daylogs)
     const intake = dayIntake(log, per, store.foods);
     const dKcal = deviOf(intake.kcal, profile.value.kcal);
     const week = weekCn[new Date(d + 'T00:00:00').getDay()];
-    const pots = summarizeMealsLog(log);
+    const pots = groupPots(log);
     const ratio = macroRatio(intake);
     return { d, log, intake, dKcal, week, pots, ratio };
   }));
@@ -90,6 +115,20 @@ function addonText(list) {
     return f ? f.name + ' ' + it.g + 'g' : '未知食材';
   }).join(' + ');
 }
+
+/* 外食/喝酒摘要（T-129）：类型 + 量级/酒量 + 折算读数。折算量的估算口径在今日页已写明，
+ * 这里只给数字 —— 但要标出它是估算，免得被当成精确记账 */
+function outingText(o) {
+  const n = outingNutri(o);
+  const type = (OUTING_TYPES.find(t => t.id === o.type) || {}).label || o.type;
+  const lv = OUTING_LEVELS.find(l => l.id === o.level);
+  const units = outingUnits(o);
+  const parts = [];
+  if (lv) parts.push(lv.label + '（估算）');
+  if (units > 0) parts.push('酒 ' + units + ' 单位');
+  return type + (parts.length ? ' · ' + parts.join(' · ') : '') +
+    ' · ≈ ' + n.kcal + ' kcal（碳水 ' + n.c + 'g）';
+}
 </script>
 
 <template>
@@ -98,11 +137,11 @@ function addonText(list) {
       <svg class="ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
       <b>体重追踪</b>
     </div>
-    <p class="t-note">晨起空腹录入；细线为每日记录，粗线为 7 日移动均线 —— 规则引擎只看均线</p>
+    <p class="t-note">晨起空腹录入；细线为每日记录，粗线为 7 日移动均线（仅展示体重趋势）。规则引擎按 14 天窗口内首末两条有效体重算变化率，首末跨度不足 7 天不出结论</p>
 
     <div class="card chart-card">
       <svg viewBox="0 0 560 220" preserveAspectRatio="xMidYMid meet" v-html="chartHtml"></svg>
-      <p v-if="!store.weights.length" class="chart-empty">暂无体重记录 —— 晨起空腹录入第一条，第 7 天起规则引擎开始工作</p>
+      <p v-if="!store.weights.length" class="chart-empty">暂无体重记录 —— 晨起空腹录入第一条；窗口内满 2 条有效体重且首末跨度 ≥ 7 天时，规则引擎才给结论</p>
     </div>
 
     <div class="card">
@@ -133,13 +172,14 @@ function addonText(list) {
         <span v-if="h.log.satiety" class="sat-tag">饱腹 {{ h.log.satiety }}/5</span>
       </div>
       <div class="history-main">
-        <div v-for="p in h.pots" :key="p.batchName" class="history-item">
-          <b>🍚 {{ p.batchName }}</b><span>{{ p.count }} 份 · {{ Math.round(p.kcal) }} kcal</span>
+        <div v-for="p in h.pots" :key="p.key" class="history-item">
+          <b>🍚 {{ p.batchName }}</b><span>{{ p.slotLabel }} · {{ fmtQty(p.count) }} 份 · {{ Math.round(p.kcal) }} kcal</span>
         </div>
-        <div v-if="!h.pots.length && h.log.meals" class="history-item"><b>正餐</b><span>{{ h.log.meals }} 份</span></div>
+        <div v-if="!h.pots.length && h.log.meals" class="history-item"><b>正餐</b><span>{{ fmtQty(h.log.meals) }} 份</span></div>
         <div class="history-item"><b>蛋白粉</b><span>{{ h.log.whey }} 勺</span></div>
         <div v-if="h.log.breakfast.length" class="history-item"><b>早餐</b><span>{{ addonText(h.log.breakfast) }}</span></div>
         <div v-if="h.log.late.length" class="history-item"><b>晚加餐</b><span>{{ addonText(h.log.late) }}</span></div>
+        <div v-if="h.log.outing" class="history-item"><b>外食/喝酒</b><span>{{ outingText(h.log.outing) }}</span></div>
       </div>
       <div class="ratio-bar">
         <i class="r-p" :style="{ width: (h.ratio.p * 100) + '%' }"></i>

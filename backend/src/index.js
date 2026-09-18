@@ -9,6 +9,7 @@ import settingsRouter from './routes/settings.js';
 import inventoryRouter from './routes/inventory.js';
 import dayLogsRouter from './routes/day-logs.js';
 import weightsRouter from './routes/weights.js';
+import cardioRouter from './routes/cardio.js';
 import ruleStateRouter from './routes/rule-state.js';
 import backupRouter from './routes/backup.js';
 
@@ -24,6 +25,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/day-logs', dayLogsRouter);
 app.use('/api/weights', weightsRouter);
+app.use('/api/cardio', cardioRouter);
 app.use('/api/rule-state', ruleStateRouter);
 app.use('/api/backup', backupRouter);
 

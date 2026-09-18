@@ -14,7 +14,8 @@
 import assert from 'node:assert/strict';
 import {
   calcProfile, calcTotals, perOf, dailyPreview, perMealTargets, autoGenerate,
-  adjustFoodByStep,
+  adjustFoodByStep, packedPortions, perMealIntake, potDaysOf,
+  deviOf, statusOf, worseOf, pctText, round1,
 } from '../frontend/src/utils.js';
 
 /* 食材表抄自 backend/src/seed.js（前端字段名是 cat，不是 category） */
@@ -71,7 +72,9 @@ function checkTrue(name, cond, detail) {
 const SPEC_SETTINGS = { weight: 90, height: 175, age: 30, sex: 'm', act: 1.375, gap: 750, proteinPer: 1.5, fatRatio: 23, manualTdee: null };
 const NAS_SETTINGS  = { weight: 90, height: 175, age: 27, sex: 'm', act: 1.375, gap: 750, proteinPer: 1.5, fatRatio: 23, manualTdee: null };
 
-const DEFAULT_ITEMS = { rice: 510, pork_loin: 500, broccoli: 400, carrot: 400, corn: 300, oil: 60 };
+/* 默认「一锅出」配方：与 backend/src/seed.js 的 DEFAULT_RECIPE 逐值同步（T-124 已改为按默认配额目标
+ * 反推克数，让空库开箱预演落绿；改 seed 配方时必须同步改这里与 [C]/[G] 段的期望值） */
+const DEFAULT_ITEMS = { rice: 660, pork_loin: 470, broccoli: 400, carrot: 400, corn: 400, oil: 100 };
 const SHRIMP_ITEMS  = { rice: 600, mushroom: 300, onion: 300, carrot: 300, corn: 540, egg: 600, shrimp: 900, oil: 60 };
 const SHRIMP_PORTIONS = 6;
 
@@ -90,18 +93,20 @@ function auditProfile() {
   check('bmr', n.bmr, 1854);
   check('tdee', n.tdee, 2549);
   check('kcal', n.kcal, 1799);
-  check('p', n.p, 135);
-  check('c', n.c, 211);
+  // T-101 修 D3 后：蛋白与热量统一乘传入体重 89（原实现蛋白仍乘静态 settings.weight 90，
+  // 得出 135 并按旧 p 反推碳水 211；统一口径后为 89×1.5=133.5→134、碳水 213）
+  check('p', n.p, 134);
+  check('c', n.c, 213);
   check('f', n.f, 46);
 }
 
 function auditBatchTotals() {
   console.log('\n[C] 一锅总量 · 默认「一锅出」配方');
   const def = calcTotals(DEFAULT_ITEMS, FOODS);
-  check('kcal', def.kcal, 3715.0);
-  check('p', def.p, 171.14);
-  check('c', def.c, 521.09);
-  check('f', def.f, 110.32);
+  check('kcal', def.kcal, 4659.1);
+  check('p', def.p, 180.18);
+  check('c', def.c, 660.56);
+  check('f', def.f, 150.31);
 
   console.log('\n[D] 一锅总量 · 当前线上配方「虾仁炒饭」');
   const shr = calcTotals(SHRIMP_ITEMS, FOODS);
@@ -131,13 +136,13 @@ function auditSpecDefaults() {
   console.log('\n[G] SPEC 默认配方（默认一锅出每份 / 每日预演 / 缺口）');
   const profile = calcProfile(SPEC_SETTINGS);
   const defPer = perOf(calcTotals(DEFAULT_ITEMS, FOODS), SHRIMP_PORTIONS);
-  check('每份 kcal', defPer.kcal, 619.17);
-  check('每份 p', defPer.p, 28.52);
+  check('每份 kcal', defPer.kcal, 776.52);
+  check('每份 p', defPer.p, 30.03);
   const defDay = dailyPreview(defPer, true);
-  check('每日预演 kcal', defDay.kcal, 1468.14);
+  check('每日预演 kcal', defDay.kcal, 1782.83);
   const gap = profile.tdee - defDay.kcal;
   console.log(`  （精确缺口 = ${fmt(gap)} kcal）`);
-  check('缺口取整', Math.round(gap), 1074, 1);
+  check('缺口取整', Math.round(gap), 759, 1);
 
   console.log('\n[H] 每餐蛋白目标（SPEC 基准 profile）');
   const t = perMealTargets(profile);
@@ -166,7 +171,8 @@ function auditAutoGenerate() {
   console.log(`  lockedProteinOver = ${r.lockedProteinOver}`);
 }
 
-/* J 段：已登记缺陷的复现检查 —— 只打印 KNOWN ISSUE，绝不能把脚本跑挂 */
+/* J 段：已登记缺陷的复现检查 —— 只打印 KNOWN ISSUE，绝不能把脚本跑挂
+ * T-101 已修 D1/D2，正常应输出「未复现」；若又打印复现，说明缺陷回归 */
 function auditKnownIssues() {
   console.log('\n[J] 已知缺陷复现检查（只打印警告，不计入失败）');
   try {
@@ -229,6 +235,150 @@ function auditAdjustStep() {
     `blocked=${atFloor.blocked}, items=${JSON.stringify(atFloor.items)}`);
 }
 
+/* L 段：分包下的每日预演（T-118）—— 分包只表达「这一锅的各餐比例」，不改变一天吃多少。
+ * 核心不变量：同一配方在分包 / 未分包两种状态下，日总量与红黄绿判定必须完全一致 ——
+ * T-117 把「一锅 = 一天」当成前提（当天份数 = Σ 各餐份数），6 份的锅一标分包就让全天热量 +120%、
+ * 门禁爆红，故这里用「严格相等」而非容差把这个不变量钉死 */
+const PACK_ALLOC = { breakfast: 1.2, lunch: 1.2, pre: 1.2, dinner: 2.4 }; // Σ = 6 = portions，比例 20/20/20/40
+
+/* 四项红黄绿的最差档，与 store.previewState 同一条判定链（deviOf → statusOf → worseOf） */
+function worstOf(daily, pf) {
+  return ['kcal', 'p', 'c', 'f']
+    .reduce((w, k) => worseOf(statusOf(deviOf(daily[k], pf[k])), w), 'ok');
+}
+
+function auditPreviewByAllocation() {
+  console.log('\n[L] 每日预演 · 分包口径（虾仁炒饭 portions 6，Σ mealAllocation = 6）');
+  const per = perOf(calcTotals(SHRIMP_ITEMS, FOODS), SHRIMP_PORTIONS);
+  const pf = calcProfile(SPEC_SETTINGS);
+
+  check('Σ 各餐份数', packedPortions(PACK_ALLOC), 6);
+  checkTrue('Σ = portions', Math.abs(packedPortions(PACK_ALLOC) - SHRIMP_PORTIONS) < 1e-6,
+    `${packedPortions(PACK_ALLOC)} / ${SHRIMP_PORTIONS}`);
+
+  // 关键断言：分包前后日总量逐值相同（严格相等，不给容差）
+  const packedA = dailyPreview(per, true, PACK_ALLOC);
+  const plainA = dailyPreview(per, true, {});
+  checkTrue('分包 = 未分包（日总量逐值相同）',
+    ['kcal', 'p', 'c', 'f'].every(k => packedA[k] === plainA[k]),
+    `分包 kcal ${fmt(packedA.kcal)} · p ${fmt(packedA.p)} · c ${fmt(packedA.c)} · f ${fmt(packedA.f)}，未分包同值`);
+  checkTrue('分包不改变红黄绿（worst 一致）',
+    worstOf(packedA, pf) === worstOf(plainA, pf),
+    `分包 ${worstOf(packedA, pf)} / 未分包 ${worstOf(plainA, pf)}、日总量偏差 ` +
+    pctText(deviOf(packedA.kcal, pf.kcal)));
+  check('分包 kcal（含加项 = [F] 段旧值）', packedA.kcal, 1840.2);
+  check('分包 p（含加项）', packedA.p, 132.1);
+  check('分包 c（含加项）', packedA.c, 232.04);
+  check('分包 f（含加项）', packedA.f, 47.14);
+
+  // 每天 2 份按分包比例拆到各餐：1.2 / 1.2 / 1.2 / 2.4 → 0.4 / 0.4 / 0.4 / 0.8
+  const meals = perMealIntake(per, PACK_ALLOC);
+  check('早饭份数 = 2 × 1.2/6', meals.breakfast.portions, 0.4);
+  check('练前餐份数', meals.pre.portions, 0.4);
+  check('晚饭份数（最大份额吃余数）', meals.dinner.portions, 0.8);
+  check('早饭 kcal = 每份 × 0.4', meals.breakfast.kcal, 322.08);
+  const sumPortions = Object.keys(meals).reduce((s, k) => s + meals[k].portions, 0);
+  check('Σ 各餐份数 = 每天 2 份', round1(sumPortions), 2);
+
+  // 各餐分别计算后相加 = 未分包的日总量（预演的各餐细分不能改变日总量）
+  const sum = Object.keys(meals).reduce((s, k) => ({
+    kcal: s.kcal + meals[k].kcal, p: s.p + meals[k].p,
+    c: s.c + meals[k].c, f: s.f + meals[k].f
+  }), { kcal: 0, p: 0, c: 0, f: 0 });
+  const plain = dailyPreview(per, false, {});
+  checkTrue('各餐相加 = 未分包日总量（不含加项，kcal/p/c/f 全部）',
+    ['kcal', 'p', 'c', 'f'].every(k => Math.abs(sum[k] - plain[k]) <= TOL),
+    `Σ kcal ${fmt(sum.kcal)} · p ${fmt(sum.p)} · c ${fmt(sum.c)} · f ${fmt(sum.f)}`);
+  checkTrue('四个餐次都有行（取整后无 0 份行）',
+    Object.keys(meals).length === 4, Object.keys(meals).join(' / '));
+
+  // 未分包：显式 {} / 缺省 / 全 0 三种写法必须与旧行为逐值相同（向后兼容基线）
+  const legacy = { kcal: per.kcal * 2, p: per.p * 2, c: per.c * 2, f: per.f * 2 };
+  ['{}', 'undefined', '全 0'].forEach((tag, i) => {
+    const a = [ {}, undefined, { breakfast: 0, lunch: 0 } ][i];
+    const d = dailyPreview(per, false, a);
+    checkTrue(`未分包（${tag}）= 每份 × 2`,
+      ['kcal', 'p', 'c', 'f'].every(k => Math.abs(d[k] - legacy[k]) <= 1e-9),
+      `kcal ${fmt(d.kcal)} / p ${fmt(d.p)} / c ${fmt(d.c)} / f ${fmt(d.f)}`);
+  });
+  check('未分包 + 加项（= [F] 段旧值）', plainA.kcal, 1840.2);
+  check('未分包 + 加项 p（= [F] 段旧值）', plainA.p, 132.1);
+
+  // 天数口径 = 份数 ÷ 每天 2 份。分包不再把天数压成 1 天（T-117 的「本锅 = 1 天」已废弃），
+  // 故 potDaysOf 的签名里已经没有 allocation —— 一锅跨几天与各餐比例无关
+  check('potDaysOf 6 份', potDaysOf(6), 3);
+  check('potDaysOf 5 份（ceil）', potDaysOf(5), 3);
+  check('potDaysOf 2 份', potDaysOf(2), 1);
+  check('packedPortions 空/全 0', packedPortions({}), 0);
+  check('packedPortions 全 0', packedPortions({ breakfast: 0, lunch: 0 }), 0);
+}
+
+/* M 段：每天份数 mealsPerDay（T-125）—— 显式形参缺省 = 2 时与旧行为逐值相同；
+ * 改成 3 时正餐日总量等比 1.5 倍、各餐比例不变；一锅天数 = 份数 ÷ M */
+function auditMealsPerDay() {
+  console.log('\n[M] 每天份数 mealsPerDay（T-125：显式形参，缺省 2 向后兼容）');
+  const per = perOf(calcTotals(SHRIMP_ITEMS, FOODS), SHRIMP_PORTIONS);
+  const pf = calcProfile(SPEC_SETTINGS);
+
+  // ① 缺省 = 传 2（向后兼容基线，逐值相同）
+  const def = dailyPreview(per, true);
+  const explicit2 = dailyPreview(per, true, {}, 2);
+  checkTrue('M 缺省 = 显式传 2（逐值相同）',
+    ['kcal', 'p', 'c', 'f'].every(k => def[k] === explicit2[k]),
+    `缺省 kcal ${fmt(def.kcal)} · 传 2 kcal ${fmt(explicit2.kcal)}`);
+
+  // ② 分包前后日总量严格相等（M = 3 时同样成立）
+  const packed3 = dailyPreview(per, true, PACK_ALLOC, 3);
+  const plain3 = dailyPreview(per, true, {}, 3);
+  checkTrue('M=3：分包前后日总量逐值相同',
+    ['kcal', 'p', 'c', 'f'].every(k => packed3[k] === plain3[k]),
+    `分包 kcal ${fmt(packed3.kcal)} · 未分包 kcal ${fmt(plain3.kcal)}`);
+
+  // ③ M=3 正餐日总量 = M=2 的 1.5 倍（加项不随 M 缩放，故只比不含加项的正餐部分）
+  const base2 = dailyPreview(per, false, {}, 2);
+  const base3 = dailyPreview(per, false, {}, 3);
+  checkTrue('M=3 正餐日总量 = M=2 的 1.5 倍',
+    ['kcal', 'p', 'c', 'f'].every(k => Math.abs(base3[k] / base2[k] - 1.5) <= 1e-9),
+    `M=2 kcal ${fmt(base2.kcal)} → M=3 kcal ${fmt(base3.kcal)}`);
+  check('M=3 碳水 = 每份 × 3', base3.c, per.c * 3);
+
+  // ④ 一锅天数 = 份数 ÷ M
+  check('potDaysOf(6, 2)', potDaysOf(6, 2), 3);
+  check('potDaysOf(6, 3)', potDaysOf(6, 3), 2);
+  check('potDaysOf 缺省 = 基线 2', potDaysOf(6), 3);
+  check('potDaysOf 份数 ≤ 0 仍 ≥1 天', potDaysOf(0, 3), 1);
+
+  // 各餐比例不随 M 变：份数与碳水都随 M 等比放大
+  const m2 = perMealIntake(per, PACK_ALLOC, 2);
+  const m3 = perMealIntake(per, PACK_ALLOC, 3);
+  check('M=2 早饭份数', m2.breakfast.portions, 0.4);
+  check('M=3 早饭份数', m3.breakfast.portions, 0.6);
+  check('M=3 晚饭份数（最大份额吃余数）', m3.dinner.portions, 1.2);
+  check('M=3 Σ 各餐份数 = 3', round1(Object.keys(m3).reduce((s, k) => s + m3[k].portions, 0)), 3);
+  checkTrue('各餐碳水随 M 等比放大 1.5 倍（比例不变）',
+    Math.abs(m3.breakfast.c / m2.breakfast.c - 1.5) <= 1e-9,
+    `M=2 早 ${fmt(m2.breakfast.c)}g → M=3 早 ${fmt(m3.breakfast.c)}g`);
+
+  // 每餐目标同比例折算：一天 M 份恰好命中「全天目标 − 加项」
+  const t2 = perMealTargets(pf, 2);
+  const t3 = perMealTargets(pf, 3);
+  check('perMealTargets 缺省 = 2（SPEC 基线 43.5）', t2.p, 43.5);
+  check('perMealTargets(M=3) 蛋白 =（目标 − 加项）÷ 3', t3.p, (pf.p - 48) / 3);
+  check('M=3 一天 3 份 + 加项 48 = 全天目标', Math.round(3 * t3.p + 48), pf.p);
+
+  // 脏值退回基线 2（与后端 1–6 整数校验同区间）
+  check('M 脏值（0）退回基线 2', potDaysOf(6, 0), 3);
+  check('M 脏值（7）退回基线 2', dailyPreview(per, false, {}, 7).kcal, per.kcal * 2);
+
+  // autoGenerate：份数 = days × M；M 缺省 = 2 时与旧断言同值
+  const r2 = autoGenerate(['rice', 'egg', 'broccoli'], 3, pf, FOODS);
+  const r3 = autoGenerate(['rice', 'egg', 'broccoli'], 3, pf, FOODS, [], 3);
+  checkTrue('autoGenerate 缺省 portions = days × 2', r2.error === false && r2.portions === 6,
+    `portions=${r2.portions}`);
+  checkTrue('autoGenerate(M=3) portions = days × 3', r3.error === false && r3.portions === 9,
+    `portions=${r3.portions}`);
+}
+
 console.log('=== 配方营养计算链路审计 · verify/calc-audit.mjs ===');
 auditProfile();
 auditBatchTotals();
@@ -237,6 +387,8 @@ auditSpecDefaults();
 auditAutoGenerate();
 auditKnownIssues();
 auditAdjustStep();
+auditPreviewByAllocation();
+auditMealsPerDay();
 
 console.log(`\n汇总：通过 ${passCount} 项 / 失败 ${failCount} 项`);
 process.exitCode = failCount > 0 ? 1 : 0;
