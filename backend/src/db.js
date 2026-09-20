@@ -10,6 +10,10 @@ fs.mkdirSync(dataDir, { recursive: true });
 export const db = new Database(path.join(dataDir, 'mealprep.db'));
 // WAL 模式：写入先落日志再入主库，异常断电时数据更安全
 db.pragma('journal_mode = WAL');
+// 外键约束 SQLite 默认关闭，且是"每连接"设置：v3.0 的 workout_sets.workout_id 声明了
+// ON DELETE CASCADE，不显式打开它就一个字都不会生效（删课留下孤儿组，前端按动作聚合时会串数据）。
+// 必须写在事务外（PRAGMA foreign_keys 在事务内是空操作），故紧贴建表之前
+db.pragma('foreign_keys = ON');
 
 // 建表语句与 SPEC v2 第 2 节逐字段一致（v1 表结构不兼容，开发期靠删库重建）
 db.exec(`
@@ -64,7 +68,9 @@ db.exec(`
     satiety INTEGER NOT NULL DEFAULT 0, -- v2.2: 当日饱腹感 0=未记录，1-5 星
     checked_in INTEGER NOT NULL DEFAULT 0, -- 打卡确认标记：0=未确认(草稿)，1=已确认
     day_type TEXT,                  -- T-126 当日登记的日类型 train|rest|none，NULL=未登记（回退 settings.dayType）
-    outing TEXT                     -- T-129 当日外食/喝酒记录 JSON {type,level,baijiu,beer,slot}，NULL=未登记
+    outing TEXT,                    -- T-129 当日外食/喝酒记录 JSON {type,level,baijiu,beer,slot}，NULL=未登记
+    rhr INTEGER                     -- v3.2 晨脉（次/分，40–120）：NULL=当天没量。不加 DEFAULT 也不回填，
+                                    -- 「没量」与「量了某值」必须区分开，趋势线只画有值的点
   );
 
   CREATE TABLE IF NOT EXISTS weights (
@@ -89,6 +95,33 @@ db.exec(`
     id INTEGER PRIMARY KEY CHECK (id=1),
     ignored TEXT NOT NULL DEFAULT '{}',   -- JSON: {"add_rice": <ms时间戳>,...}
     history TEXT NOT NULL DEFAULT '[]'
+  );
+
+  -- v3.0 训练记录（SPEC 7.2）：只存力量课，Zone2 有氧的唯一归宿仍是 cardio_logs，两者天然不双计。
+  -- 一天最多一练是常态，但补录/加练不禁止，故用自增 id 而不是以日期为主键
+  CREATE TABLE IF NOT EXISTS workout_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,                  -- 'YYYY-MM-DD'，前端传浏览器本地日期（同 cardio_logs 的 UTC 教训）
+    plan_key TEXT NOT NULL,              -- 'A'|'B'|'C'（枚举校验；不强制等于前端推导的轮换指针，用户主权优先）
+    slot TEXT,                           -- 力训时间点（记录用途，七枚举同 TRAIN_SLOTS）；NULL = 未填
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+
+  -- 一条 = 一组。workout_id 级联删除依赖上面那句 PRAGMA foreign_keys = ON，否则约束形同虚设。
+  -- 本表不存任何派生值（e1RM / 进阶提示 / 活动量全部现算）：改体重或静息心率后历史不该被旧参数污染
+  CREATE TABLE IF NOT EXISTS workout_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workout_id INTEGER NOT NULL REFERENCES workout_logs(id) ON DELETE CASCADE,
+    exercise_key TEXT NOT NULL,          -- ∈ EXERCISE_KEYS 枚举（前后端逐值一致，同 CARDIO_FORMS 哲学）
+    set_no INTEGER NOT NULL,             -- 从 1 起，按提交顺序
+    reps INTEGER NOT NULL,               -- 1–100
+    weight REAL,                         -- 哑铃 kg；自重动作为 NULL（不用 0 冒充）
+    load_tag TEXT,                       -- 阻力修饰符 band|pause|slow|unilateral，可空 —— 哑铃到顶后的进阶预留
+    rir INTEGER,                         -- 剩余次数储备 0–10，可空（回归期阶段 1 不录，NULL ≠ 录了 0）
+    to_failure INTEGER NOT NULL DEFAULT 0, -- 1 = 力竭组（力竭时一键标记比输数字顺手）
+    bodyweight_kg REAL,                  -- 当日体重快照：补录日/漏称日 join weights 会断点，快照换确定性
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
 `);
 
@@ -117,6 +150,9 @@ function migrateDayLogsColumns() {
   // T-129 外食/喝酒记录：不加 DEFAULT 也不回填 —— 「未登记」必须与「登记了一顿」区分开，
   // 老库整列补成 NULL 即天然是未登记，行为与改造前逐字段一致（各餐目标完全按原结构走）
   if (!cols.includes('outing')) db.exec('ALTER TABLE day_logs ADD COLUMN outing TEXT');
+  // v3.2 晨脉：与 day_type / outing 同一手法 —— 整列补成 NULL 即天然是「当天没量」，
+  // 无需猜测历史数据（任何回填都只能编造，且会污染后续的晨脉趋势线）
+  if (!cols.includes('rhr')) db.exec('ALTER TABLE day_logs ADD COLUMN rhr INTEGER');
 }
 migrateDayLogsColumns();
 

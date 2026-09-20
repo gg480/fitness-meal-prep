@@ -106,6 +106,25 @@ export const GI_KEYS = ['high', 'mid', 'low'];
 // 'na' 不分生熟（油脂调料奶类）。'na' 同时是列默认值：老库、老客户端、在线搜索结果都落这里 = 不提示
 export const COOKED_WEIGHT_KEYS = ['raw', 'cooked', 'dry', 'na'];
 
+/* 训练动作枚举（v3.0，SPEC 7.1）：后端校验与前端 constants.js 的 EXERCISES 逐值一致。
+ * 放在种子文件里与 NATURE_KEYS / CARDIO_FORMS 同理 —— 枚举取值由业务定义，前后端各写一份必然漂移。
+ * 铁律：key 一经发布永不改名、永不删除。历史 set 里的 key 一旦悬空，按动作聚合的力量趋势线会静默断裂
+ * （不报错、只是那条线永远画不出来），下架动作由前端标 deprecated 而不是从这份清单里摘掉 */
+export const EXERCISE_KEYS = [
+  'goblet_squat', 'db_bench', 'db_row_bench', 'rdl', 'lateral_raise', 'dead_bug',
+  'bulgarian_split_squat', 'half_kneel_press', 'bent_over_row', 'single_leg_rdl', 'curl', 'ab_wheel',
+  'wide_goblet_squat', 'sumo_squat', 'hip_thrust', 'incline_db_bench', 'db_pullover', 'triceps_ext',
+  'weighted_plank',
+];
+
+/* 力训时间点枚举（v3.0）：与前端 constants.js 的 TRAIN_SLOTS 的 id 逐字同步，改一边必须同步另一边。
+ * 与 settings.trainSlot 同值域；在 workout_logs 里只作记录用途 —— 练前练后餐的判定仍读 settings.trainSlot，
+ * 记录的 slot 是"当时实际练在哪个点"，两者可能不同（如周末改早饭前），故意不联动 */
+export const TRAIN_SLOT_KEYS = [
+  'breakfast_early', 'breakfast_late', 'before_lunch', 'after_lunch',
+  'before_dinner', 'after_dinner', 'night',
+];
+
 // 默认配方"一锅出"（T-124 按默认配额目标反推克数）：开箱 settings 是配额派 + 减脂期 + 无训练日 +
 // 90kg/175cm 男，BMI 29.4 命中官方 BMI 修正档（C2.5 / P1.2 / F0.6 g/kg），默认目标 = 1818 kcal / P108 / C225 / F54。
 // 旧的固定克数（rice 510 / pork 500 / oil 60）是按 TDEE 派写死的，开箱预演只有 1468 kcal（−19%）、

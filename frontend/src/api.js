@@ -191,6 +191,33 @@ export async function deleteCardio(id) {
   return req('DELETE', '/cardio/' + encodeURIComponent(id));
 }
 
+/* ===== 训练（v3.0，SPEC 7.4） =====
+ * date 一律由浏览器传本地日期：容器跑 UTC，服务端的"今天"会比本地晚一天（同 cardio 教训） */
+
+/* 拉取力量训练记录：from/to 均可选（YYYY-MM-DD），省略 = 不限。
+ * 今日页判「今日有无力量课」用 from=今天&to=今天；训练页取近 90 天覆盖轮换与回归期推导 */
+export async function fetchWorkouts(from, to) {
+  const qs = [];
+  if (from) qs.push('from=' + encodeURIComponent(from));
+  if (to) qs.push('to=' + encodeURIComponent(to));
+  return req('GET', '/training/workouts' + (qs.length ? '?' + qs.join('&') : ''));
+}
+
+/* 新增一次力量训练（含组明细）；后端做枚举与日期校验，返回 201 + 同一行形状 */
+export async function addWorkout(w) {
+  return req('POST', '/training/workouts', {
+    date: w.date || dateKey(),
+    planKey: w.planKey,
+    slot: w.slot || null,
+    note: w.note || '',
+    sets: w.sets || []
+  });
+}
+
+export async function deleteWorkout(id) {
+  return req('DELETE', '/training/workouts/' + encodeURIComponent(id));
+}
+
 /* ===== 规则引擎状态 ===== */
 
 /* 后端 ignored/history 可能以 JSON 文本存储，兼容两种形态 */

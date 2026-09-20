@@ -21,6 +21,8 @@ export const store = reactive({
   daylogs: {},
   weights: [],
   cardio: [],                          // 有氧记录全量（T-114）：原始记录，消耗与置换量由 cardioSummary 现算
+  workouts: [],                        // 力量训练全量（v3.0）：轮换指针 / 回归期阶段由 training.js 现算
+  training: { active: false, planKey: null }, // 训练进行中标志：今日页状态条与训练页共用
   ruleState: { ignored: {}, history: [] },
   today: Object.assign({}, DEFAULT_TODAY),
   recipe: { id: null, name: '', portions: DEFAULT_PORTIONS, items: {}, locked: [], mealAllocation: {} },
@@ -39,15 +41,20 @@ export const bodyWeight = computed(() =>
     ? store.weights[store.weights.length - 1].kg
     : null);
 
-/* 当日生效的日类型（T-126）：今日登记值优先，未登记（null）时回退 settings.dayType ——
- * 设置里那一项自此降级为「默认日类型（未登记今日状态时使用）」。
- * 登记按日期存在 day_logs，故只影响登记当天：昨天登记过训练日，今天没登记就回到默认值。
- * 优先级规则本身在 utils.pickDayType（纯函数，断言脚本可直接验），这里只负责取当天的登记值。
+/* 今日有无力量课（v3.0）：workouts 是近 90 天全量，查今天即可 —— 训练完成即 push 新行、
+ * 回撤即删行，这个 computed 自动进出，日类型口径随之切换（读时派生，SPEC 7.3.1） */
+export const hasWorkoutToday = computed(() =>
+  store.workouts.some(w => w.date === dateKey()));
+
+/* 当日生效的日类型（读时派生，SPEC 7.3.1）：手动登记值优先 → 今日有力量课则 'train'
+ * → 未登记/无课回退 settings.dayType。登记按日期存在 day_logs，故只影响登记当天；
+ * 「今日有力量课」是派生中间层，不落库 —— 这是本方案胜出的原因：回撤天然对称，无需补偿写入。
+ * 优先级规则本身在 utils.pickDayType（纯函数，断言脚本可直接验），这里只负责取当天的输入。
  * 放在 store 而不是各页各自判断：配额与分餐比例必须同源，否则会出现
  * 「今日页按训练日分餐、配方页按默认日类型校验」的口径分叉 */
 export const todayDayType = computed(() => {
   const log = store.daylogs[dateKey()];
-  return pickDayType(log && log.dayType, store.settings.dayType);
+  return pickDayType(log && log.dayType, store.settings.dayType, hasWorkoutToday.value);
 });
 
 /* F1 计算链结果，全页共享基线，按 calcMode 择一：
@@ -196,10 +203,13 @@ function fillLegacyEvents(today) {
 /* 启动：一次拉全量，解析当前配方与今日打卡 */
 export async function initStore() {
   try {
-    const [foods, settings, recipes, inventory, daylogs, weights, ruleState, cardioLogs] = await Promise.all([
+    // 训练取近 90 天（SPEC 7.4）：覆盖轮换指针与回归期推导所需的全部历史
+    const since = new Date();
+    since.setDate(since.getDate() - 90);
+    const [foods, settings, recipes, inventory, daylogs, weights, ruleState, cardioLogs, workouts] = await Promise.all([
       api.fetchFoods(), api.fetchSettings(), api.fetchRecipes(),
       api.fetchInventory(), api.fetchDayLogs(), api.fetchWeights(),
-      api.fetchRuleState(), api.fetchCardio()
+      api.fetchRuleState(), api.fetchCardio(), api.fetchWorkouts(dateKey(since))
     ]);
     store.foods = foods;
     store.settings = Object.assign({}, SETTINGS_FALLBACK, settings);
@@ -209,6 +219,7 @@ export async function initStore() {
     store.weights = weights;
     store.ruleState = ruleState;
     store.cardio = cardioLogs;
+    store.workouts = workouts;
     const cur = recipes.find(r => r.id === store.settings.current_recipe_id) || recipes[0] || null;
     store.recipe = cur
       ? {

@@ -11,6 +11,7 @@ import dayLogsRouter from './routes/day-logs.js';
 import weightsRouter from './routes/weights.js';
 import cardioRouter from './routes/cardio.js';
 import ruleStateRouter from './routes/rule-state.js';
+import trainingRouter from './routes/training.js';
 import backupRouter from './routes/backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +28,7 @@ app.use('/api/day-logs', dayLogsRouter);
 app.use('/api/weights', weightsRouter);
 app.use('/api/cardio', cardioRouter);
 app.use('/api/rule-state', ruleStateRouter);
+app.use('/api/training', trainingRouter);
 app.use('/api/backup', backupRouter);
 
 // /api 前缀下未命中的路径统一 404，保持错误格式一致

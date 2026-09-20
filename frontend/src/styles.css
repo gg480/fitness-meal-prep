@@ -1325,3 +1325,17 @@ button { font: inherit; color: inherit; }
   .form-grid { grid-template-columns: 1fr; }
   .opt { min-width: 100%; }
 }
+
+/* ===== 训练状态条（v3.0）：今日页顶部三态条，整条可点直达训练页 ===== */
+.train-status-bar {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  border: 1px solid var(--border); background: #fff;
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 12px;
+  font-size: 14px; color: var(--text-sub); cursor: pointer;
+}
+.train-status-bar .bar-arrow { margin-left: auto; font-size: 20px; color: var(--text-faint); }
+.train-status-bar.done { color: var(--ok); border-color: var(--ok); background: rgba(46, 158, 91, .06); }
+.train-status-bar.done .bar-arrow { color: var(--ok); }
+.train-status-bar.go { color: #e67e22; border-color: #e67e22; background: rgba(230, 126, 34, .07); }
+.train-status-bar.go .bar-arrow { color: #e67e22; }
+.train-status-bar.idle { color: var(--text-sub); }

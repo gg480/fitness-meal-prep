@@ -3,7 +3,7 @@
  * 正餐先在步进器上定份数，点「打卡」时一次性扣库存并生成等量事件后锁定，回撤则全额回补；
  * 蛋白粉/早餐/晚加餐为快捷食材 chips 点选录克数 */
 import { computed, ref, watch } from 'vue';
-import { store, profile, profileWithCardio, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType } from '../store';
+import { store, profile, profileWithCardio, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
 import { dateKey, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting } from '../utils';
@@ -32,6 +32,20 @@ const lowStock = computed(() => invSum.value > 0 && invSum.value <= 2);
 
 /* 已打卡 = 份数与库存已同批变动、步进器锁定；回撤后才可重新调整份数 */
 const checkedIn = computed(() => store.today.checkedIn === 1);
+
+/* ===== 训练状态条（v3.0，SPEC 7.6）：三态 =====
+ * 已完成（绿）→ 今日有力量课记录；进行中（橙）→ 训练页训练中视图未完成；
+ * 未开始（灰）→ 其余。整条可点直达训练页（进行中回训练中视图，否则下一练卡）。
+ * 与训练页共用 store.training.active 标志，KeepAlive 下切页不丢训练中视图 */
+const trainStatus = computed(() => {
+  if (hasWorkoutToday.value) return { cls: 'done', text: '今日已完成力量训练 · 查看' };
+  if (store.training.active) return { cls: 'go', text: '训练进行中 · 点击继续' };
+  return { cls: 'idle', text: '今日未训练 · 点击开始' };
+});
+function goTraining() {
+  store.page = 'training';
+  window.scrollTo(0, 0);
+}
 
 /* 今日进度环：kcal 达成度钳 0-1，环满表示达标；SVG 圆周长 2πr=314.16。
  * 目标用叠加了有氧置换的 profileWithCardio：置换出来的热量是允许吃的，环的读取口径要跟着上浮 */
@@ -588,6 +602,13 @@ function goCook() {
     <div class="sec-head">今日 · <span class="mono">{{ todayLabel }}</span>
       <span class="streak-chip" v-if="streak">🔥 {{ streak }} 天</span>
     </div>
+
+    <!-- 训练状态条（v3.0）：三态可点直达训练页，今日页其余布局一字不动 -->
+    <button type="button" class="train-status-bar" :class="trainStatus.cls" @click="goTraining">
+      <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.4 14.4 9.6 9.6"/><path d="M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.768a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.828 2.829z"/><path d="m21.5 21.5-1.4-1.4"/><path d="M3.9 3.9 2.5 2.5"/><path d="M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767-1.768a2 2 0 1 1 2.829 2.829z"/></svg>
+      <span>{{ trainStatus.text }}</span>
+      <span class="bar-arrow">›</span>
+    </button>
 
     <!-- 成就感卡：今日进度环 + 连续打卡 + 饱腹感 -->
     <div class="card achieve-card">

@@ -49,12 +49,18 @@ export function calcProfile(s, bodyWeight) {
   };
 }
 
-/* 当日生效的日类型（T-126）：登记值优先，缺失/脏值回退设置里的默认日类型；两者都非法才退回 none。
- * 抽成纯函数让 store 与断言脚本共用同一口径（store 里的 computed 只是它的一层包装），
- * 也保证「日类型怎么取」这件事全项目只有一处实现 */
-export function pickDayType(reg, fallback) {
-  const v = DAY_TYPES.indexOf(reg) >= 0 ? reg : fallback;
-  return DAY_TYPES.indexOf(v) >= 0 ? v : 'none';
+/* 当日生效的日类型（读时派生，SPEC 7.3.1）：取值链 =
+ * 手动登记（day_type）→ 当日有力量课 ? 'train' : settings.dayType（默认）→ 'none'。
+ * 「当日有力量课」是派生中间层，不落库 —— 训练完成/回撤后口径自动进出，无需补偿写入。
+ * 参数顺序 (reg, fallback, hasWorkout) 是为了兼容既有两参断言脚本（旧调用 pickDayType(reg, fallback)
+ * 行为逐字节不变）；第三参 hasWorkout 缺省视为 false。SPEC 7.3.1 的概念签名
+ * pickDayType(dayLog, hasWorkout, settings) 与本实现语义一致，仅参数排列不同。
+ * 抽成纯函数让 store 与断言脚本共用同一口径，保证「日类型怎么取」全项目只有一处实现 */
+export function pickDayType(reg, fallback, hasWorkout) {
+  if (DAY_TYPES.indexOf(reg) >= 0) return reg;
+  if (hasWorkout) return 'train';
+  const v = DAY_TYPES.indexOf(fallback) >= 0 ? fallback : 'none';
+  return v;
 }
 
 /* ===== F1' 配额派计算链：查 g/kg 配额表 → 三大营养素克数（热量是结果不是输入） =====

@@ -1,6 +1,17 @@
-# 一锅出 · 备餐管理器 — 技术规格 SPEC v2.6
+# 一锅出 · 备餐管理器 — 技术规格 SPEC v3.0
 
-> 本文件是前后端开发的唯一契约。v2 依据更新后的 PRD（五页架构：今日/配方/做饭/记录/设置）；v2.1 落地五项实施顾问需求；v2.2 落地「锅位可视化 + 事件化核销 + 成就感体系」；v2.3 修复配方保存的数据丢失缺陷；v2.4 把逐份核销重构为「一次性打卡 + 回撤」；v2.5 把配方页改为「结构化配方 + 目标导向微调」；v2.6 对齐「好人松松」减脂方法论（配额模式 + 餐次分包 + 小数份核销 + 食物性质）。
+> 本文件是前后端开发的唯一契约。v2 依据更新后的 PRD（五页架构：今日/配方/做饭/记录/设置）；v2.1 落地五项实施顾问需求；v2.2 落地「锅位可视化 + 事件化核销 + 成就感体系」；v2.3 修复配方保存的数据丢失缺陷；v2.4 把逐份核销重构为「一次性打卡 + 回撤」；v2.5 把配方页改为「结构化配方 + 目标导向微调」；v2.6 对齐「好人松松」减脂方法论（配额模式 + 餐次分包 + 小数份核销 + 食物性质）；v3.0 新增「训练安排体系」（力量课表轮换 + 组次日志 + 日类型读时派生 + 补打卡与指标线分版落地，见第 7 章）。
+
+> ## v3.0 变更摘要（新增训练安排体系）
+> - **定位**：训练**不为减脂服务**——目标是健康指标（力量 / 心肺 / 身体成分 / 活动量）与日间精力（反哺饮食执行）。**配额引擎（QUOTA_TABLE / CARB_RATIO / mealTargets）一字不动**，与饮食的联动只发生在「生效日类型」这一层。
+> - **力量课日志**：新表 `workout_logs` + `workout_sets`（一条 set = 一组；实际值入库，目标值只在界面展示，对齐 wger WorkoutLog 的「实际 + 目标」思想但只存实际侧）。**有氧不进 workout_logs**——有氧的唯一归宿仍是 `cardio_logs`（第 6 章，含加法层置换），防止活动量双计。
+> - **日类型读时派生**：`pickDayType()` 取值链从「当日登记 → settings 默认」扩为「**当日手动登记 → 当日有力量课 ? 'train' : settings 默认**」。`day_logs.day_type` 列语义一字不动（纯手动登记），训练完成**不写**该列、删除训练**天然对称回滚**——采纳架构评审的「读时派生」替代方案，废弃原「recomputeDayType 写入口」设计（写路径只碰 workout_logs，杜绝三写方竞态）。
+> - **轮换指针不落库**：`next_key` 由最后一条 workout 按 `date DESC, id DESC` 推导（A→B→C→A）。**不建 plan_state 表**（与日志双源真相、无对账机制）。
+> - **回归期阶梯可重入**：距上条 workout ≥ 21 天即重置回阶段 1（客观锚定「15RM 重量 × 10 次」），停练回归者的体感失准不参与判定。
+> - **`day_logs` 新增 `rhr` 列**（晨脉，心肺指标线数据源；立约：这是 day_logs 最后一个内嵌健康指标，再出现 HRV / 睡眠等指标一律建独立 `health_metrics` 表）。
+> - **备份**：`BACKUP_COLUMNS` 增 `workout_logs` / `workout_sets` 两表；备份 JSON 顶层新增 `schema_version` 字段（旧备份导入 = 缺表跳过、缺列补默认）。
+> - **发版切分**：v3.0.0 最小闭环（课表轮换 + 点击组次录入 + 日类型联动 + 回撤）→ v3.1.0（补打卡〔**训练 + 饮食共用历史日期交互**〕+ 组间倒计时 + 活动量环 + 确定性进阶提示）→ v3.2.0（晨脉趋势 + 力量线 + 语音观察门）。deload 自动化、课表自定义、动作库全量导入冻结为 P2。
+
 
 > ## v2.6 变更摘要（对齐「好人松松」减脂方法论）
 > - **配额模式（并行计算路径）**：`settings.calcMode` 择一 —— `tdee`（原「BMR → TDEE → 减 gap → 反推宏量」链路，逐字节不变）或 `quota`（查官方 g/kg 配额表，热量是结果而不是输入）。两派返回同名的 `c/p/f/kcal`，下游红黄绿、预演、配方库校验无需分支。
@@ -389,3 +400,147 @@ CREATE TABLE IF NOT EXISTS cardio_logs (
 ### 6.5 备份
 
 `cardio_logs` 已在备份**导出 / 导入白名单**内：`BACKUP_COLUMNS.cardio_logs = ['id','date','minutes','hr','form','created_at']`，导出成与 `GET /api/cardio` 一致的 camelCase（`createdAt`），导入时 `hr ?? null`、`form || 'other'` 与后端校验兜底同口径。启动自检 `auditBackupCoverage()` 会拿白名单与真实表结构对账 —— 表里出现白名单外的列即报警（这正是 `foods.nature` 与 `recipes.locked` 曾静默丢失的教训）。
+
+## 7. 训练安排体系（v3.0 建；含 v3.1 / v3.2 增量规划）
+
+> 定位：力量训练 + 体能（Zone2 有氧）的**记录与排程体系**。用户是断练回归者，家里哑铃 + 卧推凳，每周 3 练弹性轮换，单次 45–60 分钟。
+> 第一目标是**日间精力与意志力**（反哺饮食执行），健康指标（力量 / 心肺 / 身体成分 / 活动量）是观测线而非驱动力。
+> 理论锚点：ACSM 2026 抗阻训练立场声明（一致性 > 复杂度；家庭哑铃有效；无需力竭与复杂周期化）、WHO 活动建议（150–300 min 中等强度 / 周 + 每周 ≥ 2 次力量）、断练回归科学（肌核持久、4–12 周恢复旧水平、起步保守防伤病）、Double Progression、Karvonen 储备心率 Zone2。
+
+**与既有口径的交叉点（明确取舍，避免隐性双计 / 契约冲突）**：
+
+| # | 问题 | 取舍 |
+|---|---|---|
+| ① | 是否改动配额引擎 | **否**。`QUOTA_TABLE` / `CARB_RATIO` / `mealTargets` / `calcQuotaProfile` 一字不动，联动只通过「生效日类型」生效 |
+| ② | 力量训练是否产生「消耗置换」（像有氧那样加碳水） | **否**。力训消耗估算误差大且松松方法论未定义力训置换口径；训练日的营养差异已由 `QUOTA_TABLE` 的 train 档位 + `CARB_RATIO` 练前练后集中表达，再加置换就是双计 |
+| ③ | 是否影响打卡 / streak / 达标天数 | **否**。打卡语义仍是 `day_logs.checked_in`，训练记录不参与 |
+| ④ | 有氧记录的归宿 | **唯一归宿是 `cardio_logs`（第 6 章）**，`workout_logs` 只存力量课。Zone2 有氧照旧走加法层置换；活动量环的有氧分钟数从 `cardio_logs` 取，力量次数从 `workout_logs` 取，天然不双计 |
+| ⑤ | `day_logs.day_type` 谁来写 | **读时派生**。该列只存用户手动登记；「当日有力量课」是 `pickDayType()` 取值链的新中间层，不落库（见 7.3） |
+| ⑥ | 轮换指针存哪 | **不存**。`next_key` 从日志推导（见 7.3），杜绝双源真相 |
+
+### 7.1 课表契约（前端 constants 静态定义，纯数据可断言）
+
+**A / B / C 全身轮换**（动作顺序即疲劳管理顺序，小肌群与核心一律 superset 压时长）：
+
+| 课 | 动作序列（→ 为主线，+ 为 superset） |
+|---|---|
+| A | 高脚杯深蹲 → 哑铃卧推(凳) → 凳上支撑单臂划船 → 罗马尼亚硬拉（回归首月用「顶置停顿版」，行程到膝）→ 侧平举 + 死虫 |
+| B | 保加利亚分腿蹲 → 半跪哑铃推举 → 俯身划船 → 单腿 RDL → 弯举 + 健腹轮 |
+| C | 宽距高脚杯蹲（回归前 2 周）/ 相扑蹲（第 3 周起）→ 臀桥 → 上斜卧推 → 哑铃 pullover（竖直拉替代）→ 三头伸展 + 负重平板 |
+
+- **竖直拉缺口**：家里无单杠是长期隐患，C 课以 pullover 部分替代；训练页固定提示「建议购入门框单杠（百元级）」（提示层，不参与计算）。
+- **动作枚举（`EXERCISES`，key 只增不改）**：`goblet_squat / db_bench / db_row_bench / rdl / lateral_raise / dead_bug / bulgarian_split_squat / half_kneel_press / bent_over_row / single_leg_rdl / curl / ab_wheel / wide_goblet_squat / sumo_squat / hip_thrust / incline_db_bench / db_pullover / triceps_ext / weighted_plank`（19 个，含中文名 / 肌群标签 / 是否自重）。**铁律：key 一经发布永不改名、永不删除**，下架动作加 `deprecated: true` 标记（历史 set 的 key 悬空会让按动作聚合的趋势线静默断裂）。中文命名底稿参考开源 exercises-dataset；P2 课表自定义时再全量导入 free-exercise-db（Unlicense）。
+- **回归期阶梯（可重入，`phaseOf()` 推导，不落库）**：以「训练期」为单位——一个训练期从首条 workout（或距上一期最后一条 **≥ 21 天**断档后的首条）起算；期龄（周）= `floor((今天 − 期内首条日期) / 7) + 1`。阶段 1（期龄 ≤ 2）：**客观锚定「15RM 重量 × 10 次」**，不问体感、不录 RIR；阶段 2（期龄 3–4）：RIR 3；阶段 3（期龄 ≥ 5）：RIR 1–2。阶段只影响界面目标值与文案，不改变任何存储。
+- **进阶规则（确定性，v3.1 落地为提示层；只提示绝不自动改数据）**：同一动作同一重量，最近连续 2 次训练所有工作组均达次数区间上限（12）→ 提示加重；连续 2 次未达上限 → 提示维持；连续 3 次 → 提示降档 −5%；当次 `toFailure = 1` 且次数低于目标下限 −2 → 立即提示降档；期龄 6–8 周提示 deload（主动降一周量）。减脂期力量周波动 ±5–8% 属正常，是上述保护存在的原因。
+- **Zone2 处方**：目标心率 = `((HRmax − settings.restingHr) × 0.6~0.7) + settings.restingHr`，其中 `HRmax = 208 − 0.7 × 年龄`（Tanaka）。主放休息日；力训日可选 20 min 收尾（与第 6 章「力训后有氧 ≤ 30 min」口径一致）。记录仍走 `cardio_logs`。
+- **次数区间**：主项 8–12；力竭组可低于 8（`to_failure` 标记后 e1RM 口径见 7.5）。
+
+### 7.2 数据模型
+
+**新表 `workout_logs`**（一天最多一练是常态但补录/多练不禁止，故自增 id；只存力量课）：
+
+```sql
+CREATE TABLE IF NOT EXISTS workout_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,                  -- 'YYYY-MM-DD'，前端传浏览器本地日期（同 cardio_logs 的 UTC 教训）
+  plan_key TEXT NOT NULL,              -- 'A'|'B'|'C'（枚举校验；不强制等于推导的 next_key——用户主权，训练页默认展示 next_key）
+  slot TEXT,                           -- 力训时间点（记录用途，七枚举同 TRAIN_SLOTS；NULL = 未填）
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+```
+
+**新表 `workout_sets`**（一条 = 一组，属主删除级联）：
+
+```sql
+CREATE TABLE IF NOT EXISTS workout_sets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workout_id INTEGER NOT NULL REFERENCES workout_logs(id) ON DELETE CASCADE,
+  exercise_key TEXT NOT NULL,          -- ∈ EXERCISES 枚举（前后端逐值一致，同 CARDIO_FORMS 哲学）
+  set_no INTEGER NOT NULL,             -- 从 1 起，按提交顺序
+  reps INTEGER NOT NULL,               -- 1–100
+  weight REAL,                         -- 哑铃kg；自重动作 NULL
+  load_tag TEXT,                       -- 阻力修饰符：'band'|'pause'|'slow'|'unilateral'，可空——哑铃到顶后的进阶预留
+  rir INTEGER,                         -- 剩余次数储备 0–10，可空（阶段 1 不录）
+  to_failure INTEGER NOT NULL DEFAULT 0, -- 1 = 力竭组（一键标记，力竭时比输数字顺手）
+  bodyweight_kg REAL,                  -- 当日体重快照：补录日/漏称日 join weights 表会断点，快照换确定性
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+```
+
+- **不存派生值**：e1RM、进阶提示、活动量全部现算（与「kcal 不入库」同理——改体重 / 静息心率后历史不被旧参数污染）。
+- **`day_logs` 加列 `rhr INTEGER`**（晨脉 40–120，可空）：库缺列时 `migrateXxxColumns()` 幂等补列，老数据 NULL。
+- **迁移**：两新表 `CREATE TABLE IF NOT EXISTS` 幂等补建，无历史改写。
+
+### 7.3 联动与推导契约（核心，全部为纯函数可断言）
+
+1. **生效日类型（读时派生）**：`pickDayType(dayLog, hasWorkout, settings)` 取值链 = `dayLog.day_type（手动登记）→ hasWorkout ? 'train' : settings.dayType（默认）→ 'none'`。`store` 需在今日页加载时同步取到「今日有无力量课」。**任何写路径都不得 UPDATE `day_logs.day_type` 来表达训练完成**。
+2. **轮换指针**：`nextKey(workouts)` = 最后一条（`ORDER BY date DESC, id DESC`）的 `plan_key` 在 A→B→C→A 上的下一个；无记录时为 `'A'`。
+3. **回归期**：`phaseOf(workouts, today)` 按 7.1 阶梯推导（21 天断档重置）。
+4. **回撤对称性**：`DELETE /api/training/workouts/:id` 只删自身（sets 级联），**不需要**补偿 day_type——读时派生自动回落，这是该方案胜出的原因。
+5. **训练完成登记流（前端）**：完成后若当日无手动登记或已登记 `train` → 静默生效（下次进今日页即是 train 口径）；若已手动登记 `rest` / `none` → 底部确认条「今日已登记为休息，改为力量训练？」，10 秒无响应不改动（手动登记主权优先）。
+
+### 7.4 API 契约（前缀 /api，响应包裹同第 3 节）
+
+| 路由 | 请求 / 响应 | 校验规则 |
+|---|---|---|
+| `GET /api/training/workouts` | `?from&to`（**均可选**，省略 = 不限）→ `[{id,date,planKey,slot,note,createdAt,sets:[{id,exerciseKey,setNo,reps,weight,loadTag,rir,toFailure,bodyweightKg}]}]`，`ORDER BY date ASC, id ASC` | 给了必须 `YYYY-MM-DD`；from > to → 400 |
+| `POST /api/training/workouts` | `{date, planKey, slot?, note?, sets:[{exerciseKey,setNo,reps,weight?,loadTag?,rir?,toFailure?,bodyweightKg?}]}` → 201 + 同一行形状（含 sets） | `date` 必须 `YYYY-MM-DD` 且 **≤ 今天（拒绝未来日期，用 `todayKey()` 字符串比较）**；`planKey` ∈ A/B/C；`slot` 可空、给了必须 ∈ 七枚举（与前端 `TRAIN_SLOTS` 逐值一致）；`sets` 非空数组，每项：`exerciseKey` ∈ EXERCISES 枚举、`setNo` 正整数、`reps` 1–100 整数、`weight` 可空、给了必须 0–200、`loadTag` 可空、给了必须 ∈ `band/pause/slow/unilateral`、`rir` 可空、给了必须 0–10 整数、`toFailure` ∈ 0/1。违反 → 400 |
+| `DELETE /api/training/workouts/:id` | → `{ok:true}`（**事务内先删 sets 再删 workout**） | id 非正整数 → 400；不存在 → 404 |
+
+- **不设 `/state` 端点**：`nextKey` / `phase` / 上次参考值全部由前端 `training.js` 从 `GET /api/training/workouts` 的返回现算（见 7.5）。后端零推导，与既有分工一致；今日页判「今日有无力量课」用 `?from=今天&to=今天`，训练页取近 90 天（`?from=今天−90天`）即可覆盖轮换与回归期推导。
+- **不做按日 upsert**（同 cardio_logs 哲学：一天可多条——补录与加练是真实场景）。
+- **级联**：`workout_sets.workout_id` 需真正级联（见 7.2 的 `PRAGMA foreign_keys` 要求），DELETE 路由亦在事务内显式删 sets 双保险。
+
+### 7.5 计算层（`frontend/src/training.js`，纯计算、不依赖 Vue，Node 断言脚本直接 import）
+
+`EXERCISES` 课表常量、`nextKey()`、`phaseOf()`、`e1RM(weight, reps)`（Epley：`w × (1 + reps/30)`，仅展示派生、不作存储）、`strengthRatio(e1RM, bodyweightKg)`（力量/体重比，力量线主指标）、`zone2Range(age, restingHr)`（Karvonen）、`progressionHint(history)`（7.1 进阶规则的纯函数实现）。回归期阶段 1 的目标值固定「15RM 重量 × 10 次」，由用户首练自选重量、系统只校验次数合理性。
+
+### 7.6 前端规格（训练页无原型参照，本节即视觉/交互契约）
+
+**训练页 `TrainingView`（底部导航第 6 项「训练」，图标哑铃）**：
+- **下一练卡**：`下一练 B · 课表B · 预计45分钟` + 动作清单（每行：中文名 / 目标组次〔按 phase〕/ 上次参考值〔同动作最近一组〕）+ 「开始训练」按钮。
+- **训练中视图**：进入即请求 **Wake Lock**（`navigator.wakeLock.request('screen')`，离开视图/`visibilitychange` 隐藏时释放；不支持时静默降级）。动作行展开为组网格：重量输入**预填上次值**、次数 stepper（默认目标次数）、「力竭」一键开关、确认按钮。确认一组 = 触觉反馈（`navigator.vibrate(20)`）+ 该组划掉动画；已录组可点回编辑态（含删除该组 + 5 秒撤销 snackbar）。
+- **完成**：POST → 成功 toast + 跳回下一练卡（nextKey 已推进）。**组间倒计时（90s 环形进度、剩 10s 变色 + 震动）为 v3.1 增量，v3.0 严禁顺手实现**。
+- **今日页增量**：顶部训练状态条（三态：未开始灰 / 进行中橙 / 已完成绿），整条可点直达训练页训练中视图。今日页其余布局一字不动。
+- **语音输入**：v3.2 且先过观察门（见 7.8）。
+
+### 7.7 补打卡（v3.1 增量；训练 + 饮食共用）
+
+- **共用「历史日期」交互**：日历入口（训练页右上角 + 今日页），仅过去可选、未来置灰。
+- **训练侧**：选历史日期 → 复用录入表单 → POST 带 `date`；补录后持久横幅「已补录 9月18日 A练 · 撤销」（**不用 toast**——补错日期代价高），记录页该日加虚线「补录」徽章。
+- **饮食侧**：今日页进入「历史日期模式」（只读快照 + 可补：餐份数 / 日类型 / 打卡标记），**只补记录、绝不回溯重算**——`per_snap` / `meals_log` 是历史事实层（打卡时刻已冻结），读时派生层随补录更新（这正是补打卡的意义：让记录更真实）。实现前核查：① `day-logs` API 是否已支持任意 `date`（cardio POST 已带 date 可传历史，推测支持，需验证）② 今日页是否硬编码「今天」。
+- **口径**：`created_at` 与业务 `date` 分离，补录天然可识别（`date < created_at 的日期部分` = 补录）。
+
+### 7.8 指标线与语音观察门（v3.1 / v3.2 增量）
+
+- **周活动量双环（v3.1）**：WHO 双口径分开展示——有氧环 = 周内 `cardio_logs.minutes` 合计 / 150–300；力量环 = 周内 `workout_logs` 条数 / ≥2。不把力量分钟折算进有氧环（口径不同）。
+- **进阶提示（v3.1）**：`progressionHint()` 的界面化，规则见 7.1。
+- **晨脉趋势（v3.2）**：`day_logs.rhr` 的周均线折线（记录页）。
+- **力量线（v3.2）**：关键动作最佳组（重量×次数）进程线 + `strengthRatio` 趋势；e1RM 仅作展示派生。
+- **语音观察门（v3.2 前置条件）**：v3.0 上线后实测「单组点击录入 < 10 秒」且持续一个月 → 语音**永久砍掉**；未达标才实施：国内云 ASR（百度/讯飞，密钥入 settings）+ 点击双轨，硬约束 = ①备份导出对 ASR 密钥脱敏 ②10s 超时可取消、失败**静默**落回手动表单 ③音频 ≤ 60s / 2MB ④Express body limit 单独调大（默认 100kb 必翻车）⑤识别结果必经确认步（防 15↔50 数字误识别污染进阶数据）。
+
+### 7.9 备份与兼容
+
+`BACKUP_COLUMNS.workout_logs = ['id','date','plan_key','slot','note','created_at']`、`BACKUP_COLUMNS.workout_sets = ['id','workout_id','exercise_key','set_no','reps','weight','load_tag','rir','to_failure','bodyweight_kg','created_at']`，导出 camelCase 同 GET 响应。备份 JSON 顶层加 `schema_version: 3`；导入旧版（无该键）= 缺表跳过、`rhr` 缺列补 NULL，与既有「缺键推断」哲学一致。`auditBackupCoverage()` 自动覆盖两新表。
+
+### 7.10 验收断言（Node 直查 SQLite + 前端真机各一轮）
+
+1. **课表轮换**：Given 最后一条为 A，When `nextKey()`，Then 返回 'B'；无记录 → 'A'；C 之后 → 'A'。
+2. **回归期重入**：Given 期内首条距今 10 天，Then phase=1；Given 上条距今 22 天后新练，Then 新期 phase=1。
+3. **组次录入**：Given 卧推已录 2 组，When 录一组，Then `workout_sets` 新增一行且 `set_no=3`。
+4. **日类型联动（读时派生）**：Given 今日无手动登记、有力量课，Then `pickDayType()='train'`；Given 手动登记 'rest' 且有力量课，Then 'rest'（手动优先）。
+5. **回撤对称**：Given 当日唯一力量课被删除，Then 该日 `pickDayType()` 回落为手动登记值或默认值；`day_logs.day_type` 列前后逐字节不变。
+6. **未来日期拒绝**：POST `date=明天` → 400。
+7. **日期边界**：22:50 练完 23:10 补记，`date` 用浏览器本地日期，与容器 UTC 无关（同 cardio_logs 教训）。
+8. **真机红线**：对真实老库跑训练页完整动线（开始→录组→完成→今日页口径切换→回撤），Console 零错误；打卡 / streak / 配额克数与 v2.6 完全一致（联动只该出现在日类型层）。
+
+### 7.11 发版切分（tag 跟随本 SPEC 标题版本，发版走 release-deploy skill）
+
+| 版本 | 内容 | 上线门槛 |
+|---|---|---|
+| v3.0.0 | 课表轮换 + 点击组次录入（预填/stepper/力竭/震动/Wake Lock）+ 日类型联动 + 回撤 | 7.10 全过 + 真机老库 |
+| v3.1.0 | 补打卡（训练+饮食历史日期模式）+ 组间倒计时 + 活动量双环 + 进阶提示 | 同上 + 补录横幅/徽章实测 |
+| v3.2.0 | 晨脉趋势 + 力量线 + 语音（仅当观察门未达标） | v3.0 上线满 4 周 |
+| P2 冻结 | deload 自动化、课表自定义、free-exercise-db 全量导入 | — |
+
