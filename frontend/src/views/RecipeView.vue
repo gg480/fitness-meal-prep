@@ -234,6 +234,13 @@ const boundName = computed(() => {
   return r ? r.name : '';
 });
 
+/* 提交前过滤 locked：removeFood/clearAll/删除自定义食材只清了 items，没同步清 locked，
+ * 悬空 id 会被后端 400 拦下（locked 引用了不在 items 中的食材）；
+ * 在保存出口统一过滤，一处修复覆盖所有删食材路径与老数据悬空 */
+function cleanLocked() {
+  return (store.recipe.locked || []).filter(id => id in store.recipe.items);
+}
+
 /* 存配方：已绑定库条目 → 更新那条；未绑定（新工作区/刚清空）→ 新建一条 */
 async function saveRecipeToLib() {
   if (!Object.keys(store.recipe.items).length) { toast('请先勾选食材'); return; }
@@ -241,7 +248,7 @@ async function saveRecipeToLib() {
   const name = recipeName.value.trim() || autoRecipeName(store.recipe.items, store.foods);
   const isUpdate = !!store.recipe.id;
   try {
-    const saved = await api.saveRecipe(Object.assign({}, store.recipe, { name }));
+    const saved = await api.saveRecipe(Object.assign({}, store.recipe, { name, locked: cleanLocked() }));
     store.recipe.name = name;
     store.recipe.id = saved.id;
     recipeName.value = name;
@@ -259,7 +266,7 @@ async function saveAsNew() {
   if (allocError.value) { toast(allocError.value); return; }
   const name = recipeName.value.trim() || autoRecipeName(store.recipe.items, store.foods);
   try {
-    const saved = await api.createRecipe(Object.assign({}, store.recipe, { name, id: null }));
+    const saved = await api.createRecipe(Object.assign({}, store.recipe, { name, id: null, locked: cleanLocked() }));
     store.recipe.id = saved.id;
     store.recipe.name = name;
     recipeName.value = name;
