@@ -7,6 +7,7 @@ import { toast } from '../toast';
 import { maAt, dateKey, normDaylog, dayIntake, deviOf, statusOf, pctText, round1, qtyText, naturalOf, macroRatio, fmtQty, outingNutri, outingUnits } from '../utils';
 import { OUTING_TYPES, OUTING_LEVELS } from '../constants';
 import RuleCard from '../components/RuleCard.vue';
+import { isBackfill } from '../training';
 
 const weightInput = ref('');
 
@@ -88,21 +89,30 @@ function groupPots(log) {
   return order.map(k => map[k]);
 }
 
-/* 每日饮食回溯：按天倒序卡片，展示正餐(哪几锅各几份)/蛋白粉/加餐摄入与目标对比，
- * 附碳蛋脂供能比与达标判定（|kcal−目标|≤10% 记达标） */
 const weekCn = ['日', '一', '二', '三', '四', '五', '六'];
-const dietHistory = computed(() => Object.keys(store.daylogs)
-  .sort((a, b) => b.localeCompare(a))
-  .map(d => {
-    const log = normDaylog(store.daylogs[d]);
-    const per = log.perSnap || latestPer.value;
-    const intake = dayIntake(log, per, store.foods);
-    const dKcal = deviOf(intake.kcal, profile.value.kcal);
-    const week = weekCn[new Date(d + 'T00:00:00').getDay()];
-    const pots = groupPots(log);
-    const ratio = macroRatio(intake);
-    return { d, log, intake, dKcal, week, pots, ratio };
-  }));
+/* 每日饮食回溯：按天倒序卡片，展示正餐(哪几锅各几份)/蛋白粉/加餐摄入与目标对比，
+ * 附碳蛋脂供能比与达标判定（|kcal−目标|≤10% 记达标）。
+ * 日期集合 = 有 daylog 的天 ∪ 有力量课的天 —— 训练补录日即使没补饮食记录也要出卡片
+ * （否则徽章无处贴，用户以为补录丢了）；无 daylog 的天摄入全 0、dKcal=-100%，
+ * 天然不计入达标统计，不污染「已达标 N 天」 */
+const dietHistory = computed(() => {
+  const days = new Set(Object.keys(store.daylogs));
+  (store.workouts || []).forEach(w => days.add(w.date));
+  return [...days]
+    .sort((a, b) => b.localeCompare(a))
+    .map(d => {
+      const log = normDaylog(store.daylogs[d]);
+      const per = log.perSnap || latestPer.value;
+      const intake = dayIntake(log, per, store.foods);
+      const dKcal = deviOf(intake.kcal, profile.value.kcal);
+      const week = weekCn[new Date(d + 'T00:00:00').getDay()];
+      const pots = groupPots(log);
+      const ratio = macroRatio(intake);
+      /* 该日力量课（v3.1）：回溯卡上标出训练情况，补录的课再加虚线「补录」徽章 */
+      const ws = (store.workouts || []).filter(w => w.date === d);
+      return { d, log, intake, dKcal, week, pots, ratio, ws };
+    });
+});
 
 /* 达标天数：热量偏差 ≤10% 的天数（口径与 statusOf 绿档一致，见 PRD 表 3-1） */
 const achieveDays = computed(() =>
@@ -170,6 +180,11 @@ function outingText(o) {
     <div v-for="h in dietHistory" :key="h.d" class="history-card">
       <div class="history-date mono">{{ h.d.slice(5) }}<i>周{{ h.week }}</i>
         <span v-if="h.log.satiety" class="sat-tag">饱腹 {{ h.log.satiety }}/5</span>
+        <!-- 该日力量课（v3.1）：补录的课按 createdAt 判定，虚线徽章区别于当天记录 -->
+        <template v-for="w in h.ws" :key="w.id">
+          <span class="wk-tag">力量 · 课表{{ w.planKey }}</span>
+          <span v-if="isBackfill(w)" class="bf-badge">补录</span>
+        </template>
       </div>
       <div class="history-main">
         <div v-for="p in h.pots" :key="p.key" class="history-item">
@@ -195,3 +210,11 @@ function outingText(o) {
     </div>
   </section>
 </template>
+
+<style scoped>
+/* 回溯卡日期行的力量课标签与补录徽章（v3.1）：徽章用虚线边框，与当天记录的实心标签区分 */
+.wk-tag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--primary, #2e7d32);
+  border: 1px solid var(--primary, #2e7d32); padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+.bf-badge { font-size: 11px; font-weight: 700; color: #7a5b00; border: 1px dashed #f0d77a;
+  background: #fff8e1; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+</style>

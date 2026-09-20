@@ -6,13 +6,14 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting } from '../utils';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting } from '../utils';
 import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
 import GapRow from '../components/GapRow.vue';
 import FoodNatureNotice from '../components/FoodNatureNotice.vue';
 import CardioCard from '../components/CardioCard.vue';
+import CalendarSheet from '../components/CalendarSheet.vue';
 
 const weekCn = ['日', '一', '二', '三', '四', '五', '六'];
 const now = new Date();
@@ -595,13 +596,129 @@ function goCook() {
   store.cookPhase = 'weigh';
   store.page = 'cook';
 }
+
+/* ===== 饮食补录（v3.1，SPEC 7.7）：共用「历史日期」日历入口 =====
+ * 只补记录（正餐份数 / 打卡标记 / 日类型），不改已生成的 per_snap 快照、不回溯重算 ——
+ * 历史事实层（mealsLog / perSnap）冻结，读时派生层（dayType→配额→分餐）随补录更新 */
+const showCal = ref(false);
+const histDate = ref(null);
+const histLog = ref(null);
+
+/* 补录日的人类可读文案：7月3日（周三），与训练侧共用口径 */
+function mdText(d) {
+  const ymd = (d || '').split('-');
+  if (ymd.length !== 3) return '';
+  const dt = new Date(+ymd[0], +ymd[1] - 1, +ymd[2]);
+  return (+ymd[1]) + '月' + (+ymd[2]) + '日（周' + weekCn[dt.getDay()] + '）';
+}
+const histLabel = computed(() => (histDate.value ? mdText(histDate.value) : ''));
+
+/* 进入历史模式：读该日既有记录（无则默认空档），整页切到「快照 + 补录」视图 */
+function enterHistory(d) {
+  showCal.value = false;
+  histDate.value = d;
+  histLog.value = normDaylog(store.daylogs[d]);
+}
+
+/* 退出历史模式：回到今日视图（已保存的改动已写库，未保存的直接丢弃） */
+function exitHistory() {
+  histDate.value = null;
+  histLog.value = null;
+}
+
+/* 历史日已登记的日类型：与 regDayType 同口径，只认三个枚举 */
+const histDayType = computed(() => {
+  const t = histLog.value;
+  return t && DAY_TYPES.indexOf(t.dayType) >= 0 ? t.dayType : null;
+});
+
+/* 历史日摄入：优先该日快照（打卡时已冻结），无快照（老数据）用当前批次兜底 ——
+ * 补录用现在信息补全历史，而不是假装当天就用了这一锅 */
+const histIntake = computed(() => {
+  const t = histLog.value;
+  return t ? dayIntake(t, t.perSnap || latestPer.value, store.foods) : null;
+});
+
+/* 保存补录：只覆盖 meals / checkedIn / dayType 三字段，其余（perSnap / mealsLog /
+ * 外食 / 加餐）保持该日原样 —— 只补记录，绝不回溯重算。
+ * 底用「默认空档 + 原记录覆盖」：无原记录（补录全新一天）也带全字段，后端 whey 等必填校验才过 */
+async function saveBackfill() {
+  const d = histDate.value;
+  const t = histLog.value;
+  if (!d || !t) return;
+  const base = Object.assign({}, normDaylog({}), store.daylogs[d] || {});
+  const merged = Object.assign({}, base, {
+    meals: t.meals, checkedIn: t.checkedIn ? 1 : 0, dayType: t.dayType
+  });
+  try {
+    await api.saveDayLog(d, merged);
+    store.daylogs[d] = merged;
+    toast('已补录 ' + mdText(d));
+    exitHistory();
+  } catch (err) {
+    toast(err.message);
+  }
+}
 </script>
 
 <template>
   <section class="narrow">
-    <div class="sec-head">今日 · <span class="mono">{{ todayLabel }}</span>
-      <span class="streak-chip" v-if="streak">🔥 {{ streak }} 天</span>
+    <div class="sec-head">
+      <template v-if="histDate">
+        补录 · <span class="mono">{{ histLabel }}</span>
+        <button type="button" class="cal-btn" @click="exitHistory">返回今日</button>
+      </template>
+      <template v-else>
+        今日 · <span class="mono">{{ todayLabel }}</span>
+        <span class="streak-chip" v-if="streak">🔥 {{ streak }} 天</span>
+        <button type="button" class="cal-btn" @click="showCal = true">补录</button>
+      </template>
     </div>
+
+    <!-- 历史视图（补录）：只补记录（份数/打卡标记/日类型），快照与核销事件只读 ——
+         补录日可能是无记录的空档，故「当日快照」卡在无数据时说明清楚而不是留白 -->
+    <template v-if="histDate">
+      <div class="card">
+        <div class="card-title">当日快照 <span class="sum-sub">历史事实 · 只读</span></div>
+        <p v-if="histIntake" class="addon-sum mono">
+          摄入 {{ Math.round(histIntake.kcal) }} kcal · P{{ round1(histIntake.p) }} · C{{ round1(histIntake.c) }} · F{{ round1(histIntake.f) }}
+        </p>
+        <p v-if="histLog.perSnap" class="addon-note">
+          快照为当天打卡时冻结的数据（当时那锅的营养 / 核销事件），补录只补记录、不回溯重算当天摄入。
+        </p>
+        <p v-else class="addon-note">
+          该日原本没有记录：下方补录会新建记录，摄入按最近一锅估算（无快照可对照）。
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-title">补录记录
+          <span v-if="histLog.checkedIn" class="done-tag">已补录打卡</span>
+          <span class="sum-sub">只改份数 / 打卡 / 日类型</span>
+        </div>
+        <div class="meal-row">
+          <span class="inv-name">正餐份数</span>
+          <Stepper :model-value="histLog.meals" :min="0" :max="MEAL_MAX" :step="MEAL_STEP"
+            :disabled="histLog.checkedIn" @update:model-value="histLog.meals = $event" />
+          <span class="st-hint">份 · 打卡后锁定</span>
+        </div>
+        <label class="bf-check">
+          <input type="checkbox" v-model="histLog.checkedIn"> 该日已打卡
+          <span class="sum-sub">补打卡不扣当前库存，只补历史记录</span>
+        </label>
+        <div class="seg mt16">
+          <label v-for="o in DAY_TYPE_OPTS" :key="'h' + String(o.v)" class="seg-item">
+            <input type="radio" name="histDayType" :checked="histDayType === o.v" @change="histLog.dayType = o.v">
+            {{ o.label }}
+          </label>
+        </div>
+        <div class="btn-row mt16">
+          <button class="btn primary xl" type="button" @click="saveBackfill">保存补录</button>
+        </div>
+      </div>
+    </template>
+
+    <template v-else>
 
     <!-- 训练状态条（v3.0）：三态可点直达训练页，今日页其余布局一字不动 -->
     <button type="button" class="train-status-bar" :class="trainStatus.cls" @click="goTraining">
@@ -950,5 +1067,20 @@ function goCook() {
       </ul>
       <button class="btn primary xl" type="button" @click="goCook">去做饭</button>
     </div>
+    </template>
+
+    <!-- 共用日历（训练页 / 今日页同一入口）：只允许选今天及以前的日期 -->
+    <CalendarSheet :show="showCal" :max="dateKey()" @select="enterHistory" @close="showCal = false" />
   </section>
 </template>
+
+<style scoped>
+/* 补录入口（与训练页同一视觉）：sec-head 是 flex，auto 左边距把它推到最右 */
+.cal-btn { margin-left: auto; border: 1px solid var(--border, #ddd); background: #fff; color: var(--primary, #2e7d32);
+  font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 14px; cursor: pointer; }
+
+/* 补录卡的打卡勾选行：checkbox + 说明文字同一行，说明可换行 */
+.bf-check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; font-weight: 700;
+  flex-wrap: wrap; }
+.bf-check .sum-sub { font-weight: 400; }
+</style>

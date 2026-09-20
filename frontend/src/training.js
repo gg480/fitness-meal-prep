@@ -124,6 +124,12 @@ export function phaseOf(workouts, today) {
   return { phase: weekAge <= 2 ? 1 : weekAge <= 4 ? 2 : 3, periodStart, weekAge };
 }
 
+/* 补录识别（SPEC 7.7）：created_at 的日期部分 > 业务 date = 事后补录。
+ * createdAt 缺失（老数据/导入旧备份）一律视为非补录 —— 没有证据不贴标签 */
+export function isBackfill(w) {
+  return !!(w && w.createdAt && String(w.createdAt).slice(0, 10) > String(w.date || ''));
+}
+
 /* Epley 估算 1RM：w × (1 + reps/30)。仅展示派生、不作存储（改体重后历史不污染）。
  * 入参非法返回 0，展示层不因脏数据抛错 */
 export const e1RM = (weight, reps) => {

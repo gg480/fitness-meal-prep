@@ -7,11 +7,43 @@ import { store, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
 import { dateKey } from '../utils';
-import { EXERCISES, PLANS, nextKey, phaseOf } from '../training';
+import { EXERCISES, PLANS, nextKey, phaseOf, isBackfill } from '../training';
 import Stepper from '../components/Stepper.vue';
+import CalendarSheet from '../components/CalendarSheet.vue';
 
 /* ===== 下一练卡 ===== */
 const mode = ref('next'); // 'next' 下一练卡 | 'workout' 训练中
+
+/* 补录（v3.1，SPEC 7.7）：日历选历史日期 → 复用训练中表单 → POST 带 date。
+ * backfillDate 非空 = 当前在补录某历史日；完成/放弃后清空 */
+const showCal = ref(false);
+const backfillDate = ref(null);
+const mdOf = d => +d.slice(5, 7) + '月' + +d.slice(8) + '日';
+const backfillText = computed(() => (backfillDate.value ? mdOf(backfillDate.value) : ''));
+function openCal() { showCal.value = true; }
+function onPickBackfill(d) {
+  showCal.value = false;
+  backfillDate.value = d;
+  startWorkout(d);
+}
+
+/* 最近一条补录（读时派生）：createdAt 日期部分 > date 即补录，取 createdAt 最新者。
+ * 撤销后 workouts 更新、横幅自动消失 —— 无需额外状态，刷新后依然一致 */
+const latestBackfill = computed(() => {
+  const list = (store.workouts || []).filter(isBackfill);
+  return list.length ? list.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)) : null;
+});
+async function undoBackfill() {
+  const b = latestBackfill.value;
+  if (!b) return;
+  try {
+    await api.deleteWorkout(b.id);
+    store.workouts = store.workouts.filter(w => w.id !== b.id);
+    toast('已撤销补录');
+  } catch (err) {
+    toast(err.message);
+  }
+}
 
 /* 回归期阶段（今日口径）：影响目标组次文案与 C 课首动作切换 */
 const ph = computed(() => phaseOf(store.workouts, dateKey()));
@@ -96,7 +128,8 @@ function onVisibility() {
 /* ===== 训练中视图 ===== */
 const draft = ref({ planKey: null, date: '', rows: [] });
 
-function startWorkout() {
+/* 开始训练：date 缺省 = 今天（正常练）；补录时由日历传入历史日期（SPEC 7.7） */
+function startWorkout(date) {
   const plan = PLANS[nextKeyName.value];
   const rows = plan.exercises.map(ex => {
     const key = ex.swap && ph.value.phase >= 2 ? ex.swap : ex.key;
@@ -108,7 +141,7 @@ function startWorkout() {
       }))
     };
   });
-  draft.value = { planKey: plan.key, date: dateKey(), rows };
+  draft.value = { planKey: plan.key, date: date || dateKey(), rows };
   store.training.active = true;
   store.training.planKey = plan.key;
   mode.value = 'workout';
@@ -120,6 +153,7 @@ function resetWorkout() {
   draft.value = { planKey: null, date: '', rows: [] };
   store.training.active = false;
   store.training.planKey = null;
+  backfillDate.value = null;
   releaseWakeLock();
 }
 
@@ -197,7 +231,7 @@ async function finishWorkout() {
       sets
     });
     store.workouts.push(saved);
-    toast('训练已记录');
+    toast(backfillDate.value ? '已补录' : '训练已记录');
     resetWorkout();
   } catch (err) {
     toast(err.message);
@@ -222,6 +256,7 @@ onDeactivated(releaseWakeLock);
         <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.4 14.4 9.6 9.6"/><path d="M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.768a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.828 2.829z"/><path d="m21.5 21.5-1.4-1.4"/><path d="M3.9 3.9 2.5 2.5"/><path d="M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767-1.768a2 2 0 1 1 2.829 2.829z"/></svg>
         <span>训练</span>
         <span class="sec-sub">课表 A → B → C 轮换 · 每周 3 练</span>
+        <button type="button" class="cal-btn" @click="openCal">补录</button>
       </div>
 
       <div class="next-head">
@@ -258,6 +293,7 @@ onDeactivated(releaseWakeLock);
         <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.4 14.4 9.6 9.6"/><path d="M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.768a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.828 2.829z"/><path d="m21.5 21.5-1.4-1.4"/><path d="M3.9 3.9 2.5 2.5"/><path d="M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767-1.768a2 2 0 1 1 2.829 2.829z"/></svg>
         <span>训练中 · 课表{{ draft.planKey }}</span>
         <span class="sec-sub progress-line">{{ doneCount }} / {{ totalCount }} 组</span>
+        <span v-if="backfillDate" class="bf-tag">补录 {{ backfillText }}</span>
       </div>
 
       <div v-for="(row, ri) in draft.rows" :key="row.exerciseKey" class="ex-block">
@@ -306,15 +342,23 @@ onDeactivated(releaseWakeLock);
 
       <div class="btn-row">
         <button class="btn ghost" type="button" @click="resetWorkout">放弃</button>
-        <button class="btn primary" type="button" :disabled="!allDone" @click="finishWorkout">完成训练</button>
+        <button class="btn primary" type="button" :disabled="!allDone" @click="finishWorkout">{{ backfillDate ? '保存补录' : '完成训练' }}</button>
       </div>
     </section>
+
+    <!-- 补录持久横幅（SPEC 7.7）：不用 toast —— 补错日期代价高，给一个不自动消失的撤销入口 -->
+    <div v-if="latestBackfill" class="bf-banner" role="status">
+      <span>已补录 {{ mdOf(latestBackfill.date) }} {{ latestBackfill.planKey }}练</span>
+      <button type="button" class="btn sm primary" @click="undoBackfill">撤销</button>
+    </div>
 
     <!-- 删除组撤销 snackbar -->
     <div v-if="deleted" class="undo-bar" role="status">
       已删除该组
       <button type="button" class="btn sm primary" @click="undoDelete">撤销</button>
     </div>
+
+    <CalendarSheet :show="showCal" :max="dateKey()" @select="onPickBackfill" @close="showCal = false" />
   </div>
 </template>
 
@@ -372,4 +416,13 @@ onDeactivated(releaseWakeLock);
 .undo-bar { position: fixed; left: 50%; bottom: 76px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 12px; background: #333; color: #fff; padding: 10px 16px;
   border-radius: 24px; font-size: 13px; z-index: 30; }
+
+/* 补录（v3.1）：入口按钮右对齐 + 训练中视图日期标签 + 持久横幅 */
+.cal-btn { margin-left: auto; border: 1px solid var(--border, #ddd); background: #fff; color: var(--primary, #2e7d32);
+  font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 14px; cursor: pointer; }
+.bf-tag { margin-left: auto; font-size: 12px; font-weight: 700; color: #fff; background: var(--primary, #2e7d32);
+  padding: 3px 8px; border-radius: 10px; }
+.bf-banner { margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; background: #fff8e1; border: 1px solid #f0d77a; color: #7a5b00; padding: 10px 14px;
+  border-radius: 10px; font-size: 13px; font-weight: 700; }
 </style>
