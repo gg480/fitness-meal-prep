@@ -1,0 +1,16 @@
+{
+  "key": "curl",
+  "cn": "哑铃弯举",
+  "ex_name": "dumbbell alternate seated hammer curl",
+  "exerciseId": "6em2Dxj",
+  "gifUrl": "https://static.exercisedb.dev/media/6em2Dxj.gif",
+  "instructions": [
+    "Step:1 Sit on a bench with a dumbbell in each hand, palms facing your torso and arms extended down.",
+    "Step:2 Keep your back straight and your elbows close to your torso.",
+    "Step:3 Exhale and curl the dumbbell in your right hand towards your shoulder, keeping your upper arm stationary.",
+    "Step:4 Continue to raise the dumbbell until your biceps are fully contracted and the dumbbell is at shoulder level.",
+    "Step:5 Pause for a brief moment, then inhale and slowly lower the dumbbell back to the starting position.",
+    "Step:6 Repeat the movement with your left arm.",
+    "Step:7 Continue alternating arms for the desired number of repetitions."
+  ]
+}

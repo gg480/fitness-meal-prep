@@ -3,6 +3,9 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  // 动作库动图（v3.2）为 .gif 静态资源：vite 默认 assetsInclude 不含该扩展名，
+  // 不配置会在 import 动图时解析失败，这里显式纳入作为资源处理
+  assetsInclude: ['**/*.gif'],
   server: {
     proxy: {
       // 开发时把 /api 转发到本地 Express，保持与生产同源部署一致的请求路径

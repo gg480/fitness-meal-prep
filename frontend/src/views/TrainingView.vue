@@ -8,8 +8,15 @@ import * as api from '../api';
 import { toast } from '../toast';
 import { dateKey } from '../utils';
 import { EXERCISES, PLANS, nextKey, phaseOf, isBackfill } from '../training';
+import { ACTION_GUIDES } from '../action-guides';
 import Stepper from '../components/Stepper.vue';
 import CalendarSheet from '../components/CalendarSheet.vue';
+import ActionModal from '../components/ActionModal.vue';
+
+/* 动作指引弹窗（v3.2 动作库）：点击动作名/缩略动图打开大图 + 要点 */
+const actionModal = ref(null);
+function openAction(key) { actionModal.value = key; }
+function closeAction() { actionModal.value = null; }
 
 /* ===== 下一练卡 ===== */
 const mode = ref('next'); // 'next' 下一练卡 | 'workout' 训练中
@@ -266,9 +273,15 @@ onDeactivated(releaseWakeLock);
 
       <ul class="ex-list">
         <li v-for="(ex, i) in planExercises" :key="ex.key" class="ex-li">
+          <button type="button" class="ex-thumb" :class="{ empty: !(ACTION_GUIDES[ex.key] && ACTION_GUIDES[ex.key].gif) }"
+            :aria-label="'查看 ' + exName(ex.key) + ' 动作指引'" @click="openAction(ex.key)">
+            <img v-if="ACTION_GUIDES[ex.key] && ACTION_GUIDES[ex.key].gif" :src="ACTION_GUIDES[ex.key].gif"
+              :alt="exName(ex.key)" loading="lazy" />
+            <span v-else>?</span>
+          </button>
           <span class="ex-idx">{{ i + 1 }}</span>
           <div class="ex-info">
-            <b class="ex-name">{{ exName(ex.key) }}</b>
+            <button type="button" class="ex-name-btn" @click="openAction(ex.key)">{{ exName(ex.key) }}</button>
             <span class="ex-sub">{{ exGroup(ex.key) }}{{ ex.superset ? ' · 与 ' + exName(ex.superset) + ' 成组做' : '' }}</span>
           </div>
           <div class="ex-right">
@@ -300,6 +313,11 @@ onDeactivated(releaseWakeLock);
         <div class="ex-row">
           <b>{{ exName(row.exerciseKey) }}</b>
           <span class="ex-group">{{ exGroup(row.exerciseKey) }}{{ isBodyweight(row.exerciseKey) ? ' · 自重' : '' }}</span>
+          <button v-if="ACTION_GUIDES[row.exerciseKey]" type="button" class="guide-btn"
+            :class="{ empty: !ACTION_GUIDES[row.exerciseKey].gif }"
+            :aria-label="'查看 ' + exName(row.exerciseKey) + ' 动作指引'" @click="openAction(row.exerciseKey)">
+            指引▶
+          </button>
         </div>
         <div class="set-grid">
           <div v-for="(g, gi) in row.sets" :key="gi" class="set-cell"
@@ -359,6 +377,8 @@ onDeactivated(releaseWakeLock);
     </div>
 
     <CalendarSheet :show="showCal" :max="dateKey()" @select="onPickBackfill" @close="showCal = false" />
+
+    <ActionModal :show="!!actionModal" :exercise-key="actionModal ?? ''" @close="closeAction" />
   </div>
 </template>
 
@@ -425,4 +445,16 @@ onDeactivated(releaseWakeLock);
 .bf-banner { margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between;
   gap: 12px; background: #fff8e1; border: 1px solid #f0d77a; color: #7a5b00; padding: 10px 14px;
   border-radius: 10px; font-size: 13px; font-weight: 700; }
+
+/* 动作指引（v3.2 动作库）：训练前列表缩略图 + 动作名按钮 + 训练中指引按钮 */
+.ex-thumb { width: 44px; height: 44px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border, #eee);
+  background: #f7f7f7; cursor: pointer; padding: 0; flex: none; display: flex; align-items: center; justify-content: center; }
+.ex-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ex-thumb.empty { color: var(--text-faint); font-size: 16px; font-weight: 700; }
+.ex-name-btn { border: none; background: none; padding: 0; font-size: 15px; font-weight: 700;
+  color: var(--text); cursor: pointer; text-align: left; }
+.ex-name-btn:hover { color: var(--primary); }
+.guide-btn { margin-left: auto; border: 1px solid var(--primary, #2e7d32); background: #fff; color: var(--primary, #2e7d32);
+  font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 10px; cursor: pointer; }
+.guide-btn.empty { border-color: var(--border, #ddd); color: var(--text-faint); }
 </style>

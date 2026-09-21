@@ -1,0 +1,14 @@
+{
+  "key": "db_bench",
+  "cn": "哑铃卧推（凳）",
+  "ex_name": "dumbbell bench seated press",
+  "exerciseId": "3d7wHyd",
+  "gifUrl": "https://static.exercisedb.dev/media/3d7wHyd.gif",
+  "instructions": [
+    "Step:1 Sit on a bench with a dumbbell in each hand, resting on your thighs.",
+    "Step:2 Lean back and position the dumbbells to the sides of your chest, palms facing forward.",
+    "Step:3 Press the dumbbells upward until your arms are fully extended.",
+    "Step:4 Pause for a moment at the top, then slowly lower the dumbbells back to the starting position.",
+    "Step:5 Repeat for the desired number of repetitions."
+  ]
+}
