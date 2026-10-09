@@ -45,6 +45,41 @@ export const SEED_FOODS = [
   { id: 'yam',          name: '山药',              category: 'grain',   unit: '生重', kcal: 57,  protein: 1.9,  carbs: 12.4, fat: 0.2, nature: 'staple', gi: 'mid',  cookedWeight: 'raw' },
   // 南瓜按他的表归主食（碳水率低但有 5% 左右，不是不限量的叶菜），故从蔬菜区块移到主食并计入克数
   { id: 'pumpkin',      name: '南瓜',              category: 'grain',   unit: '生重', kcal: 23,  protein: 0.7,  carbs: 5.3,  fat: 0.1, nature: 'staple', gi: 'high', cookedWeight: 'raw' },
+  /* 本轮精选扩充（2026-10-09）：把食材库从 37 种补到 ~160 种。数据源《中国食物成分表标准版 第6版》常用值
+   * 及 USDA FoodData Central 交叉核对；GI 口径沿用上面的法则 —— 薯粮豆主食标 GI，非碳水蛋白/蔬菜 gi 一律 null。
+   * 铁律不变：预设 id 一经发布永不改名/删除，故全部用新语义 id，绝不改已有 37 种 */
+  // 土豆（用户点名必加）：生土豆 GI 因品种与做法分叉大（煮 ~66 中 / 烤更高），家庭以降糖吃为主蒸煮
+  { id: 'potato',             name: '土豆',              category: 'grain', unit: '生重', kcal: 77,  protein: 2.0,  carbs: 17.2, fat: 0.2, nature: 'staple', gi: 'mid',  cookedWeight: 'raw' },
+  // 紫薯 GI 50–60，比红薯略低一档（花青素含量高不影响升糖，但常见口感更面、蒸煮为主）
+  { id: 'purple_sweet_potato', name: '紫薯',             category: 'grain', unit: '生重', kcal: 82,  protein: 1.3,  carbs: 18.6, fat: 0.2, nature: 'staple', gi: 'mid',  cookedWeight: 'raw' },
+  // 芋头 GI ~48–63，介于低与中之间；当作米饭替代吃，标 mid 保守
+  { id: 'taro',               name: '芋头',              category: 'grain', unit: '生重', kcal: 81,  protein: 2.2,  carbs: 18.1, fat: 0.2, nature: 'staple', gi: 'mid',  cookedWeight: 'raw' },
+  // 莲藕碳水率 16%，近似薯类；广东家常当煲汤/炒菜，但吃多了仍是碳户，故归主食标 GI
+  { id: 'lotus_root',         name: '莲藕',              category: 'grain', unit: '生重', kcal: 73,  protein: 1.9,  carbs: 16.4, fat: 0.2, nature: 'staple', gi: 'high', cookedWeight: 'raw' },
+  // 干面条（非油面非即食面）按干重记账；GI 高（小麦精制面）
+  { id: 'noodles',            name: '面条（干）',        category: 'grain', unit: '干重', kcal: 347, protein: 11.8, carbs: 74.2, fat: 0.7, nature: 'staple', gi: 'high', cookedWeight: 'dry' },
+  // 鲜湿切面水分大，按生重记账，与干面是两条（避免克数口径混淆）
+  { id: 'noodles_fresh',      name: '面条（鲜）',        category: 'grain', unit: '生重', kcal: 280, protein: 8.3,  carbs: 59.9, fat: 2.0, nature: 'staple', gi: 'high', cookedWeight: 'raw' },
+  // 馒头（蒸）按成品熟重称；精白面粉 GI 高
+  { id: 'mantou',             name: '馒头',              category: 'grain', unit: '熟重', kcal: 223, protein: 7.0,  carbs: 47.0, fat: 1.1, nature: 'staple', gi: 'high', cookedWeight: 'cooked' },
+  // 米粉（干）同精制稻米类，GI 高
+  { id: 'rice_noodle',        name: '米粉（干）',        category: 'grain', unit: '干重', kcal: 349, protein: 7.4,  carbs: 79.9, fat: 0.2, nature: 'staple', gi: 'high', cookedWeight: 'dry' },
+  // 全麦面包保留麸皮与整粒，GI 低于白面包
+  { id: 'whole_wheat_bread',  name: '全麦面包',          category: 'grain', unit: '熟重', kcal: 246, protein: 10.0, carbs: 41.0, fat: 3.4, nature: 'staple', gi: 'mid',  cookedWeight: 'cooked' },
+  { id: 'white_bread',        name: '白面包',            category: 'grain', unit: '熟重', kcal: 283, protein: 8.0,  carbs: 50.0, fat: 4.0, nature: 'staple', gi: 'high', cookedWeight: 'cooked' },
+  // 荞麦整粒 GI 低（未精制）
+  { id: 'buckwheat',          name: '荞麦',              category: 'grain', unit: '干重', kcal: 337, protein: 9.3,  carbs: 73.0, fat: 2.3, nature: 'staple', gi: 'low',  cookedWeight: 'dry' },
+  // 即食燕麦片是精制速食形态，GI 高（与整粒燕麦米的低 GI 相反），故单列一条
+  { id: 'instant_oat',        name: '燕麦片（即食）',    category: 'grain', unit: '干重', kcal: 391, protein: 14.0, carbs: 61.0, fat: 6.0, nature: 'staple', gi: 'high', cookedWeight: 'dry' },
+  // 杂豆是优质慢碳主食（蛋白高、GI 低），可按替代米饭吃
+  { id: 'red_bean',           name: '红豆',              category: 'grain', unit: '干重', kcal: 324, protein: 20.2, carbs: 63.4, fat: 0.6, nature: 'staple', gi: 'low',  cookedWeight: 'dry' },
+  { id: 'mung_bean',          name: '绿豆',              category: 'grain', unit: '干重', kcal: 329, protein: 21.6, carbs: 62.0, fat: 0.8, nature: 'staple', gi: 'low',  cookedWeight: 'dry' },
+  { id: 'chickpea',           name: '鹰嘴豆',            category: 'grain', unit: '干重', kcal: 330, protein: 19.0, carbs: 60.0, fat: 6.0, nature: 'staple', gi: 'low',  cookedWeight: 'dry' },
+  { id: 'kidney_bean',        name: '芸豆',              category: 'grain', unit: '干重', kcal: 330, protein: 21.0, carbs: 60.0, fat: 1.0, nature: 'staple', gi: 'low',  cookedWeight: 'dry' },
+  // 玉米糁（粗加工玉米）GI 中，介于甜玉米与糯玉米之间
+  { id: 'corn_grits',         name: '玉米糁',            category: 'grain', unit: '干重', kcal: 348, protein: 8.0,  carbs: 75.0, fat: 1.5, nature: 'staple', gi: 'mid',  cookedWeight: 'dry' },
+  { id: 'sorghum',            name: '高粱米',            category: 'grain', unit: '干重', kcal: 351, protein: 10.4, carbs: 74.7, fat: 3.1, nature: 'staple', gi: 'mid',  cookedWeight: 'dry' },
+  { id: 'barley',             name: '大麦',              category: 'grain', unit: '干重', kcal: 327, protein: 9.5,  carbs: 69.4, fat: 1.4, nature: 'staple', gi: 'low',  cookedWeight: 'dry' },
   // 蛋白 protein（非碳水来源，表19 无 GI 行 → gi 一律 null = 未标注）
   // 猪里脊脂肪 7.9% 高于「瘦肉 <5%」这条数据线，但仍标瘦肉：他整套方法论是按部位/做法（品名）判的
   // ——「无白色脂肪层的猪牛羊就是瘦肉」，而不是按营养表的脂肪率反推。同一部位换成数据判据会让
@@ -64,6 +99,66 @@ export const SEED_FOODS = [
   { id: 'tofu',           name: '北豆腐',         category: 'protein', unit: '生重', kcal: 116, protein: 12.2, carbs: 4.2, fat: 4.8, nature: 'other', gi: null, cookedWeight: 'raw' },
   { id: 'whey',           name: '乳清蛋白粉',     category: 'protein', unit: '干重', kcal: 383, protein: 80.0, carbs: 7.0, fat: 5.0, nature: 'protein_powder', gi: null, cookedWeight: 'dry' },
   { id: 'milk',           name: '纯牛奶',         category: 'protein', unit: '毫升', kcal: 65,  protein: 3.3,  carbs: 5.0,  fat: 3.6, nature: 'milk', gi: null, cookedWeight: 'na' },
+  /* 蛋白类扩充（数据源《中国食物成分表标准版 第6版》/ USDA FoodData Central）。
+   * 脂肪判据沿用方法论：无白色脂肪层的猪牛羊 + 去皮禽 + 鱼虾贝 + 内脏肝肾肚血心 = 瘦肉 lean_meat；
+   * 带雪花/加工/脂肪率明显高的标 high_fat_meat（触发排除清单提示）。非碳水来源 gi 一律 null */
+  { id: 'pork_leg_lean',  name: '猪腿肉',         category: 'protein', unit: '生重', kcal: 154, protein: 19.5, carbs: 0,   fat: 8.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pork_shoulder',  name: '猪梅花肉',       category: 'protein', unit: '生重', kcal: 190, protein: 16.0, carbs: 0,   fat: 13.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pork_belly',     name: '五花肉',         category: 'protein', unit: '生重', kcal: 395, protein: 13.0, carbs: 0,   fat: 37.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pork_ribs',      name: '猪肋排',         category: 'protein', unit: '生重', kcal: 278, protein: 16.0, carbs: 0,   fat: 23.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pork_liver',     name: '猪肝',           category: 'protein', unit: '生重', kcal: 129, protein: 19.3, carbs: 5.0,  fat: 3.5,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pork_heart',     name: '猪心',           category: 'protein', unit: '生重', kcal: 119, protein: 16.6, carbs: 1.5,  fat: 5.3,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pork_blood',     name: '猪血',           category: 'protein', unit: '生重', kcal: 55,  protein: 12.2, carbs: 0.9,  fat: 0.3,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'beef_shank',     name: '牛腱子',         category: 'protein', unit: '生重', kcal: 106, protein: 20.0, carbs: 0.5,  fat: 2.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'beef_brisket',   name: '牛腩',           category: 'protein', unit: '生重', kcal: 220, protein: 19.0, carbs: 0,   fat: 16.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'beef_shabu',     name: '肥牛卷',         category: 'protein', unit: '生重', kcal: 250, protein: 18.0, carbs: 0,   fat: 20.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'beef_liver',     name: '牛肝',           category: 'protein', unit: '生重', kcal: 135, protein: 19.0, carbs: 4.0,  fat: 4.5,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'lamb_lean',      name: '瘦羊肉',         category: 'protein', unit: '生重', kcal: 118, protein: 20.0, carbs: 0,   fat: 3.5,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'lamb_leg',       name: '羊腿',           category: 'protein', unit: '生重', kcal: 133, protein: 20.0, carbs: 0,   fat: 5.5,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'lamb_chop',      name: '羊排',           category: 'protein', unit: '生重', kcal: 280, protein: 17.0, carbs: 0,   fat: 23.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'chicken_wing',   name: '鸡翅',           category: 'protein', unit: '生重', kcal: 194, protein: 17.4, carbs: 0,   fat: 13.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'chicken_gizzard', name: '鸡胗',          category: 'protein', unit: '生重', kcal: 104, protein: 19.0, carbs: 2.0,  fat: 3.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'chicken_heart',  name: '鸡心',           category: 'protein', unit: '生重', kcal: 120, protein: 15.0, carbs: 1.0,  fat: 9.0,  nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'duck_lean',      name: '去皮鸭肉',       category: 'protein', unit: '生重', kcal: 128, protein: 18.8, carbs: 0,   fat: 6.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'duck_breast',    name: '鸭胸',           category: 'protein', unit: '生重', kcal: 140, protein: 17.0, carbs: 4.0,  fat: 6.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  // 加工肉：盐糖 + 油脂高，统一标高脂肉（排除清单会提示少碰）
+  { id: 'ham',            name: '火腿',           category: 'protein', unit: '生重', kcal: 130, protein: 15.0, carbs: 1.0,  fat: 8.0,  nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'bacon',          name: '培根',           category: 'protein', unit: '生重', kcal: 393, protein: 13.0, carbs: 1.0,  fat: 38.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'sausage',        name: '香肠',           category: 'protein', unit: '生重', kcal: 300, protein: 15.0, carbs: 5.0,  fat: 25.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  // 蛋：整体归 'egg' 性质（胆碱/全蛋摄入有其专门提示口径）
+  { id: 'quail_egg',      name: '鹌鹑蛋',         category: 'protein', unit: '生重', kcal: 160, protein: 13.0, carbs: 2.0,  fat: 11.0, nature: 'egg', gi: null, cookedWeight: 'raw' },
+  { id: 'salted_egg',     name: '咸鸭蛋',         category: 'protein', unit: '生重', kcal: 190, protein: 12.7, carbs: 2.0,  fat: 12.0, nature: 'egg', gi: null, cookedWeight: 'raw' },
+  // 豆制品：他明说不能替代瘦肉（蛋白率低且附赠等量脂肪），归 'other'，不新增豆制品枚举（枚举越少越不漂移）
+  { id: 'soybeans',       name: '黄豆',           category: 'protein', unit: '干重', kcal: 359, protein: 35.0, carbs: 34.0, fat: 16.0, nature: 'other', gi: null, cookedWeight: 'dry' },
+  { id: 'tofu_dry',       name: '豆腐干',         category: 'protein', unit: '生重', kcal: 142, protein: 16.0, carbs: 11.0, fat: 6.0,  nature: 'other', gi: null, cookedWeight: 'raw' },
+  { id: 'yuba',           name: '腐竹',           category: 'protein', unit: '干重', kcal: 461, protein: 44.0, carbs: 33.0, fat: 22.0, nature: 'other', gi: null, cookedWeight: 'dry' },
+  { id: 'south_tofu',     name: '南豆腐',         category: 'protein', unit: '生重', kcal: 87,  protein: 6.2,  carbs: 4.0,  fat: 4.0,  nature: 'other', gi: null, cookedWeight: 'raw' },
+  { id: 'silken_tofu',    name: '内酯豆腐',       category: 'protein', unit: '生重', kcal: 50,  protein: 5.0,  carbs: 3.0,  fat: 2.0,  nature: 'other', gi: null, cookedWeight: 'raw' },
+  // 奶/乳制品：性质 'milk'；固体/浓稠品用克重（na 不分生熟）
+  { id: 'greek_yogurt',   name: '希腊酸奶',       category: 'protein', unit: '克重', kcal: 59,  protein: 10.0, carbs: 4.0,  fat: 0.4,  nature: 'milk', gi: null, cookedWeight: 'na' },
+  { id: 'plain_yogurt',   name: '无糖酸奶',       category: 'protein', unit: '克重', kcal: 60,  protein: 3.0,  carbs: 5.0,  fat: 3.0,  nature: 'milk', gi: null, cookedWeight: 'na' },
+  { id: 'cheese',         name: '奶酪',           category: 'protein', unit: '克重', kcal: 328, protein: 25.0, carbs: 2.0,  fat: 24.0, nature: 'milk', gi: null, cookedWeight: 'na' },
+  { id: 'skim_milk',      name: '脱脂牛奶',       category: 'protein', unit: '毫升', kcal: 34,  protein: 3.4,  carbs: 5.0,  fat: 0.1,  nature: 'milk', gi: null, cookedWeight: 'na' },
+  // 鱼：白肉鱼脂肪率低为瘦肉，油脂重的（秋刀鱼）标高脂肉
+  { id: 'cod',            name: '鳕鱼',           category: 'protein', unit: '生重', kcal: 88,  protein: 20.0, carbs: 0,   fat: 5.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'basa',           name: '巴沙鱼',         category: 'protein', unit: '生重', kcal: 90,  protein: 17.0, carbs: 0,   fat: 1.4,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'grass_carp',     name: '草鱼',           category: 'protein', unit: '生重', kcal: 113, protein: 16.6, carbs: 0,   fat: 5.2,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'sea_bass',       name: '鲈鱼',           category: 'protein', unit: '生重', kcal: 105, protein: 18.0, carbs: 0,   fat: 3.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'tilapia',        name: '罗非鱼',         category: 'protein', unit: '生重', kcal: 109, protein: 20.0, carbs: 0,   fat: 3.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'hairtail',       name: '带鱼',           category: 'protein', unit: '生重', kcal: 127, protein: 17.7, carbs: 0,   fat: 4.9,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'saury',          name: '秋刀鱼',         category: 'protein', unit: '生重', kcal: 314, protein: 18.0, carbs: 0,   fat: 25.0, nature: 'high_fat_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'tuna',           name: '金枪鱼',         category: 'protein', unit: '生重', kcal: 108, protein: 24.0, carbs: 0,   fat: 1.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'croaker',        name: '黄花鱼',         category: 'protein', unit: '生重', kcal: 100, protein: 18.0, carbs: 0,   fat: 3.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'pomfret',        name: '鲳鱼',           category: 'protein', unit: '生重', kcal: 140, protein: 18.0, carbs: 0,   fat: 7.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  // 虾蟹贝：整体低脂，归瘦肉
+  { id: 'prawn',          name: '对虾',           category: 'protein', unit: '生重', kcal: 93,  protein: 18.0, carbs: 0,   fat: 1.5,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'crab',           name: '大闸蟹',         category: 'protein', unit: '生重', kcal: 95,  protein: 14.0, carbs: 2.0,  fat: 3.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'clam',           name: '蛤蜊',           category: 'protein', unit: '生重', kcal: 87,  protein: 15.0, carbs: 2.0,  fat: 1.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'oyster',         name: '生蚝',           category: 'protein', unit: '生重', kcal: 57,  protein: 5.0,  carbs: 3.0,  fat: 2.5,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'scallop',        name: '扇贝',           category: 'protein', unit: '生重', kcal: 78,  protein: 11.0, carbs: 1.0,  fat: 0.7,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'squid',          name: '鱿鱼',           category: 'protein', unit: '生重', kcal: 84,  protein: 15.0, carbs: 0,   fat: 1.4,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'abalone',        name: '鲍鱼',           category: 'protein', unit: '生重', kcal: 105, protein: 17.0, carbs: 6.0,  fat: 3.0,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
+  { id: 'snail',          name: '田螺',           category: 'protein', unit: '生重', kcal: 60,  protein: 11.0, carbs: 3.0,  fat: 0.2,  nature: 'lean_meat', gi: null, cookedWeight: 'raw' },
   // 蔬菜 veg（蔬菜不限量不计入，GI 无实践意义 → 一律 null）
   { id: 'broccoli',    name: '西兰花',     category: 'veg', unit: '生重', kcal: 36,  protein: 4.1, carbs: 4.3,  fat: 0.6, nature: 'veg', gi: null, cookedWeight: 'raw' },
   { id: 'carrot',      name: '胡萝卜',     category: 'veg', unit: '生重', kcal: 39,  protein: 1.0, carbs: 8.8,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
@@ -76,12 +171,72 @@ export const SEED_FOODS = [
   { id: 'cabbage',     name: '大白菜',     category: 'veg', unit: '生重', kcal: 20,  protein: 1.6, carbs: 3.4,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
   { id: 'cucumber',    name: '黄瓜',       category: 'veg', unit: '生重', kcal: 16,  protein: 0.8, carbs: 2.9,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
   { id: 'tomato',      name: '番茄',       category: 'veg', unit: '生重', kcal: 20,  protein: 0.9, carbs: 4.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  /* 蔬菜扩充（《中国食物成分表标准版 第6版》常用值）。蔬菜不限量不计入，故不标注 GI（与既有 11 种同口径）。
+   * 干海产/干货（木耳/海带/紫菜/银耳/黄花菜）按干重记账；焯水烫菜（西洋菜/菠菜）仍按生重称入口时同样不计 */
+  { id: 'lettuce',        name: '生菜',     category: 'veg', unit: '生重', kcal: 16,  protein: 1.4, carbs: 2.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'bok_choy',       name: '小白菜',   category: 'veg', unit: '生重', kcal: 15,  protein: 1.5, carbs: 2.7,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'cai_xin',        name: '菜心',     category: 'veg', unit: '生重', kcal: 22,  protein: 2.4, carbs: 3.4,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'water_spinach',  name: '空心菜',   category: 'veg', unit: '生重', kcal: 23,  protein: 2.6, carbs: 3.6,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'watercress',     name: '西洋菜',   category: 'veg', unit: '生重', kcal: 12,  protein: 1.5, carbs: 1.8,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'chinese_chives', name: '韭菜',     category: 'veg', unit: '生重', kcal: 25,  protein: 2.2, carbs: 4.5,  fat: 0.4, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'chinese_onion',  name: '小葱',     category: 'veg', unit: '生重', kcal: 27,  protein: 1.5, carbs: 5.0,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'amaranth',       name: '苋菜',     category: 'veg', unit: '生重', kcal: 25,  protein: 2.8, carbs: 3.5,  fat: 0.4, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'crown_daisy',    name: '茼蒿',     category: 'veg', unit: '生重', kcal: 24,  protein: 1.9, carbs: 3.6,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'celery',         name: '芹菜',     category: 'veg', unit: '生重', kcal: 20,  protein: 1.2, carbs: 3.6,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'coriander',      name: '香菜',     category: 'veg', unit: '生重', kcal: 30,  protein: 2.0, carbs: 5.0,  fat: 0.5, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'lettuce_stem',   name: '莴笋',     category: 'veg', unit: '生重', kcal: 15,  protein: 1.5, carbs: 2.5,  fat: 0.1, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'mustard_green',  name: '芥蓝',     category: 'veg', unit: '生重', kcal: 25,  protein: 2.2, carbs: 5.0,  fat: 0.4, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'kale',           name: '羽衣甘蓝', category: 'veg', unit: '生重', kcal: 30,  protein: 3.0, carbs: 6.0,  fat: 0.5, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'red_cabbage',    name: '紫甘蓝',   category: 'veg', unit: '生重', kcal: 25,  protein: 1.9, carbs: 6.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'baby_cabbage',   name: '娃娃菜',   category: 'veg', unit: '生重', kcal: 13,  protein: 1.4, carbs: 2.4,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'round_cabbage',  name: '包菜',     category: 'veg', unit: '生重', kcal: 20,  protein: 1.5, carbs: 4.6,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'winter_melon',   name: '冬瓜',     category: 'veg', unit: '生重', kcal: 12,  protein: 0.4, carbs: 1.9,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'luffa',          name: '丝瓜',     category: 'veg', unit: '生重', kcal: 20,  protein: 0.8, carbs: 4.2,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'bitter_gourd',   name: '苦瓜',     category: 'veg', unit: '生重', kcal: 22,  protein: 1.0, carbs: 3.7,  fat: 0.1, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'zucchini',       name: '西葫芦',   category: 'veg', unit: '生重', kcal: 19,  protein: 0.8, carbs: 3.8,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'eggplant',       name: '茄子',     category: 'veg', unit: '生重', kcal: 25,  protein: 1.0, carbs: 5.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'chilli',         name: '小米椒',   category: 'veg', unit: '生重', kcal: 32,  protein: 1.5, carbs: 6.0,  fat: 0.4, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'green_pepper',   name: '青椒',     category: 'veg', unit: '生重', kcal: 24,  protein: 1.0, carbs: 4.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'ginger',         name: '生姜',     category: 'veg', unit: '生重', kcal: 41,  protein: 1.3, carbs: 8.5,  fat: 0.6, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'cauliflower',    name: '菜花',     category: 'veg', unit: '生重', kcal: 26,  protein: 2.0, carbs: 5.0,  fat: 0.1, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'radish',         name: '白萝卜',   category: 'veg', unit: '生重', kcal: 16,  protein: 0.7, carbs: 3.0,  fat: 0.1, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'green_beans',    name: '四季豆',   category: 'veg', unit: '生重', kcal: 34,  protein: 2.2, carbs: 6.5,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'long_bean',      name: '豇豆',     category: 'veg', unit: '生重', kcal: 35,  protein: 2.6, carbs: 6.0,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'snow_pea',       name: '荷兰豆',   category: 'veg', unit: '生重', kcal: 40,  protein: 3.0, carbs: 7.0,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'okra',           name: '秋葵',     category: 'veg', unit: '生重', kcal: 25,  protein: 1.9, carbs: 5.0,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'bamboo_shoot',   name: '竹笋',     category: 'veg', unit: '生重', kcal: 20,  protein: 1.8, carbs: 3.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'garlic_sprout',  name: '蒜薹',     category: 'veg', unit: '生重', kcal: 40,  protein: 2.0, carbs: 9.0,  fat: 0.5, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'enoki',          name: '金针菇',   category: 'veg', unit: '生重', kcal: 32,  protein: 2.4, carbs: 5.6,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'king_oyster',    name: '杏鲍菇',   category: 'veg', unit: '生重', kcal: 35,  protein: 1.3, carbs: 6.7,  fat: 0.1, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'oyster_mushroom', name: '平菇',    category: 'veg', unit: '生重', kcal: 24,  protein: 2.0, carbs: 4.0,  fat: 0.2, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'white_mushroom',  name: '口蘑',    category: 'veg', unit: '生重', kcal: 30,  protein: 3.0, carbs: 5.0,  fat: 0.5, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'straw_mushroom',  name: '草菇',    category: 'veg', unit: '生重', kcal: 25,  protein: 2.0, carbs: 4.0,  fat: 0.3, nature: 'veg', gi: null, cookedWeight: 'raw' },
+  { id: 'wood_ear',       name: '木耳（干）', category: 'veg', unit: '干重', kcal: 265, protein: 13.0, carbs: 70.0, fat: 1.0, nature: 'veg', gi: null, cookedWeight: 'dry' },
+  { id: 'silver_ear',     name: '银耳（干）', category: 'veg', unit: '干重', kcal: 200, protein: 4.0,  carbs: 67.0, fat: 0.6, nature: 'veg', gi: null, cookedWeight: 'dry' },
+  { id: 'seaweed',        name: '海带（干）', category: 'veg', unit: '干重', kcal: 82,  protein: 1.8,  carbs: 17.0, fat: 0.1, nature: 'veg', gi: null, cookedWeight: 'dry' },
+  { id: 'laver',          name: '紫菜（干）', category: 'veg', unit: '干重', kcal: 250, protein: 27.0, carbs: 44.0, fat: 1.1, nature: 'veg', gi: null, cookedWeight: 'dry' },
   // 油脂调料 fat（酱油 / 蚝油维持 nature='other'，不新增「调料」枚举：枚举越少越不易漂移，
   // 它们本就不在排除清单里，多一个枚举只会在表单里多一个没人维护的选项）
   { id: 'oil',          name: '食用油', category: 'fat', unit: '克重', kcal: 899, protein: 0,   carbs: 0,    fat: 99.9, nature: 'oil', gi: null, cookedWeight: 'na' },
   { id: 'soy_sauce',    name: '酱油',   category: 'fat', unit: '克重', kcal: 63,  protein: 5.6, carbs: 10.1, fat: 0.1, nature: 'other', gi: null, cookedWeight: 'na' },
   { id: 'oyster_sauce', name: '蚝油',   category: 'fat', unit: '克重', kcal: 114, protein: 3.0, carbs: 8.9,  fat: 0.2, nature: 'other', gi: null, cookedWeight: 'na' },
   { id: 'sesame_oil',   name: '芝麻油', category: 'fat', unit: '克重', kcal: 898, protein: 0,   carbs: 0,    fat: 99.7, nature: 'oil', gi: null, cookedWeight: 'na' },
+  /* 油脂/酱料扩充。纯油脂 nature='oil'；糖/蜂蜜归 sugar_oil（提示糖油混合物少碰）；
+   * 含碳水不高、作蘸料用的酱（豆瓣酱/醋/番茄酱）维持 'other'（本就徘徊在排除清单外）。
+   * 均非碳水主食来源 → gi 一律 null（不违反「非主食不标 GI」断言） */
+  { id: 'olive_oil',    name: '橄榄油', category: 'fat', unit: '克重', kcal: 900, protein: 0,   carbs: 0,    fat: 100.0, nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'peanut_oil',   name: '花生油', category: 'fat', unit: '克重', kcal: 899, protein: 0,   carbs: 0,    fat: 99.0,  nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'canola_oil',   name: '菜籽油', category: 'fat', unit: '克重', kcal: 899, protein: 0,   carbs: 0,    fat: 99.0,  nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'coconut_oil',  name: '椰子油', category: 'fat', unit: '克重', kcal: 892, protein: 0,   carbs: 0,    fat: 99.0,  nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'lard',         name: '猪油',   category: 'fat', unit: '克重', kcal: 897, protein: 0,   carbs: 0,    fat: 99.6,  nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'butter',       name: '黄油',   category: 'fat', unit: '克重', kcal: 717, protein: 0.9, carbs: 0.1,  fat: 81.0,  nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'peanut_butter', name: '花生酱', category: 'fat', unit: '克重', kcal: 600, protein: 25.0, carbs: 20.0, fat: 50.0, nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'sesame_paste', name: '芝麻酱', category: 'fat', unit: '克重', kcal: 630, protein: 17.0, carbs: 25.0, fat: 56.0, nature: 'oil', gi: null, cookedWeight: 'na' },
+  { id: 'sugar',        name: '白砂糖', category: 'fat', unit: '克重', kcal: 400, protein: 0,   carbs: 99.9, fat: 0,     nature: 'sugar_oil', gi: null, cookedWeight: 'na' },
+  { id: 'honey',        name: '蜂蜜',   category: 'fat', unit: '克重', kcal: 320, protein: 0.4, carbs: 80.0, fat: 0,     nature: 'sugar_oil', gi: null, cookedWeight: 'na' },
+  { id: 'doubanjiang',  name: '豆瓣酱', category: 'fat', unit: '克重', kcal: 30,  protein: 4.0, carbs: 6.0,  fat: 0.5,   nature: 'other', gi: null, cookedWeight: 'na' },
+  { id: 'vinegar',      name: '食醋',   category: 'fat', unit: '克重', kcal: 31,  protein: 0.1, carbs: 6.0,  fat: 0,     nature: 'other', gi: null, cookedWeight: 'na' },
+  { id: 'ketchup',      name: '番茄酱', category: 'fat', unit: '克重', kcal: 80,  protein: 1.0, carbs: 18.0, fat: 0.2,   nature: 'other', gi: null, cookedWeight: 'na' },
 ];
 
 // 食物性质枚举（T-113）：后端校验与前端 constants.js NATURES 同口径。

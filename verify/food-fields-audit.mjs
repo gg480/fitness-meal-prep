@@ -58,12 +58,21 @@ const EXPECT_GI = {
   oat_rice: 'low', quinoa: 'low',
   // 玉米两条：甜玉米 GI 50–60（中）、糯玉米 GI 70–106（高）
   corn: 'mid', corn_waxy: 'high',
-  // 红薯两条：蒸煮 77（高）、烤 94（高）；烤的更高但没有第四档，故两条同为高
+  // 红薯两条：蒸煮 77（高）、烤 94（高）
   sweet_potato: 'high', sweet_potato_baked: 'high',
   yam: 'mid', pumpkin: 'high',
+  // 2026-10-09 精选扩充的薯粮豆主食（佚 GI 档位与 seed.js 逐条对应）
+  potato: 'mid', purple_sweet_potato: 'mid', taro: 'mid', lotus_root: 'high',
+  noodles: 'high', noodles_fresh: 'high', mantou: 'high', rice_noodle: 'high',
+  whole_wheat_bread: 'mid', white_bread: 'high',
+  buckwheat: 'low', instant_oat: 'high',
+  red_bean: 'low', mung_bean: 'low', chickpea: 'low', kidney_bean: 'low',
+  corn_grits: 'mid', sorghum: 'mid', barley: 'low',
 };
-// T-128 拆条后的预设总数（原 35 + 糯玉米 + 红薯（烤））
-const PRESET_COUNT = 37;
+// T-128 拆条后的预设总数 + 2026-10-09 精选扩充（原 37 → 扩充主食 19 + 蛋白 51 + 蔬菜 42 + 油脂 13 = 162）
+const PRESET_COUNT = 162;
+// 有 GI 标注的预设主食条数（= 主食 grain 总数，分身随 seed.js SEED_FOODS 增减）
+const STAPLE_COUNT = 31;
 // T-128 旧配方样本：引用旧 id 'corn'（= 拆条后的甜玉米）与旧 id 'sweet_potato'
 const T128_RECIPE_NAME = '审计-拆条前的旧配方';
 const T128_PORTIONS = 4;
@@ -77,18 +86,60 @@ const OLD_CUSTOM_NAME = '改造前的自定义食材';
  * 同时把 unit 也钉住 —— 这次实测发现被写坏的除了 name 还有 unit（35 行 '??'），
  * 它只影响展示、不参与计算，正是「不报错的静默错」 */
 const PRESET_NAME_UNIT = {
+  // 主食 grain (31)
   rice: ['大米', '干重'], brown_rice: ['糙米', '干重'], black_rice: ['黑米', '干重'],
   millet: ['小米', '干重'], oat_rice: ['燕麦米', '干重'], quinoa: ['藜麦', '干重'],
   corn: ['甜玉米', '生重'], corn_waxy: ['糯玉米', '生重'],
   sweet_potato: ['红薯（蒸煮）', '生重'], sweet_potato_baked: ['红薯（烤）', '熟重'],
   yam: ['山药', '生重'], pumpkin: ['南瓜', '生重'],
+  potato: ['土豆', '生重'], purple_sweet_potato: ['紫薯', '生重'], taro: ['芋头', '生重'],
+  lotus_root: ['莲藕', '生重'], noodles: ['面条（干）', '干重'], noodles_fresh: ['面条（鲜）', '生重'],
+  mantou: ['馒头', '熟重'], rice_noodle: ['米粉（干）', '干重'],
+  whole_wheat_bread: ['全麦面包', '熟重'], white_bread: ['白面包', '熟重'],
+  buckwheat: ['荞麦', '干重'], instant_oat: ['燕麦片（即食）', '干重'],
+  red_bean: ['红豆', '干重'], mung_bean: ['绿豆', '干重'], chickpea: ['鹰嘴豆', '干重'], kidney_bean: ['芸豆', '干重'],
+  corn_grits: ['玉米糁', '干重'], sorghum: ['高粱米', '干重'], barley: ['大麦', '干重'],
+  // 蛋白 protein (61)
   pork_loin: ['猪里脊', '生重'], chicken_breast: ['鸡胸肉', '生重'], chicken_thigh: ['鸡腿肉（去皮）', '生重'],
   shrimp: ['虾仁', '生重'], beef_loin: ['牛里脊', '生重'], salmon: ['三文鱼', '生重'],
   egg: ['鸡蛋', '生重'], tofu: ['北豆腐', '生重'], whey: ['乳清蛋白粉', '干重'], milk: ['纯牛奶', '毫升'],
+  pork_leg_lean: ['猪腿肉', '生重'], pork_shoulder: ['猪梅花肉', '生重'], pork_belly: ['五花肉', '生重'],
+  pork_ribs: ['猪肋排', '生重'], pork_liver: ['猪肝', '生重'], pork_heart: ['猪心', '生重'], pork_blood: ['猪血', '生重'],
+  beef_shank: ['牛腱子', '生重'], beef_brisket: ['牛腩', '生重'], beef_shabu: ['肥牛卷', '生重'], beef_liver: ['牛肝', '生重'],
+  lamb_lean: ['瘦羊肉', '生重'], lamb_leg: ['羊腿', '生重'], lamb_chop: ['羊排', '生重'],
+  chicken_wing: ['鸡翅', '生重'], chicken_gizzard: ['鸡胗', '生重'], chicken_heart: ['鸡心', '生重'],
+  duck_lean: ['去皮鸭肉', '生重'], duck_breast: ['鸭胸', '生重'],
+  ham: ['火腿', '生重'], bacon: ['培根', '生重'], sausage: ['香肠', '生重'],
+  quail_egg: ['鹌鹑蛋', '生重'], salted_egg: ['咸鸭蛋', '生重'],
+  soybeans: ['黄豆', '干重'], tofu_dry: ['豆腐干', '生重'], yuba: ['腐竹', '干重'],
+  south_tofu: ['南豆腐', '生重'], silken_tofu: ['内酯豆腐', '生重'],
+  greek_yogurt: ['希腊酸奶', '克重'], plain_yogurt: ['无糖酸奶', '克重'], cheese: ['奶酪', '克重'], skim_milk: ['脱脂牛奶', '毫升'],
+  cod: ['鳕鱼', '生重'], basa: ['巴沙鱼', '生重'], grass_carp: ['草鱼', '生重'], sea_bass: ['鲈鱼', '生重'],
+  tilapia: ['罗非鱼', '生重'], hairtail: ['带鱼', '生重'], saury: ['秋刀鱼', '生重'], tuna: ['金枪鱼', '生重'],
+  croaker: ['黄花鱼', '生重'], pomfret: ['鲳鱼', '生重'],
+  prawn: ['对虾', '生重'], crab: ['大闸蟹', '生重'], clam: ['蛤蜊', '生重'], oyster: ['生蚝', '生重'],
+  scallop: ['扇贝', '生重'], squid: ['鱿鱼', '生重'], abalone: ['鲍鱼', '生重'], snail: ['田螺', '生重'],
+  // 蔬菜 veg (53)
   broccoli: ['西兰花', '生重'], carrot: ['胡萝卜', '生重'], peas: ['青豆', '生重'], asparagus: ['芦笋', '生重'],
   bell_pepper: ['彩椒', '生重'], mushroom: ['香菇（鲜）', '生重'], onion: ['洋葱', '生重'],
   spinach: ['菠菜', '生重'], cabbage: ['大白菜', '生重'], cucumber: ['黄瓜', '生重'], tomato: ['番茄', '生重'],
+  lettuce: ['生菜', '生重'], bok_choy: ['小白菜', '生重'], cai_xin: ['菜心', '生重'], water_spinach: ['空心菜', '生重'],
+  watercress: ['西洋菜', '生重'], chinese_chives: ['韭菜', '生重'], chinese_onion: ['小葱', '生重'], amaranth: ['苋菜', '生重'],
+  crown_daisy: ['茼蒿', '生重'], celery: ['芹菜', '生重'], coriander: ['香菜', '生重'], lettuce_stem: ['莴笋', '生重'],
+  mustard_green: ['芥蓝', '生重'], kale: ['羽衣甘蓝', '生重'], red_cabbage: ['紫甘蓝', '生重'], baby_cabbage: ['娃娃菜', '生重'],
+  round_cabbage: ['包菜', '生重'], winter_melon: ['冬瓜', '生重'], luffa: ['丝瓜', '生重'], bitter_gourd: ['苦瓜', '生重'],
+  zucchini: ['西葫芦', '生重'], eggplant: ['茄子', '生重'], chilli: ['小米椒', '生重'], green_pepper: ['青椒', '生重'],
+  ginger: ['生姜', '生重'], cauliflower: ['菜花', '生重'], radish: ['白萝卜', '生重'], green_beans: ['四季豆', '生重'],
+  long_bean: ['豇豆', '生重'], snow_pea: ['荷兰豆', '生重'], okra: ['秋葵', '生重'], bamboo_shoot: ['竹笋', '生重'],
+  garlic_sprout: ['蒜薹', '生重'],
+  enoki: ['金针菇', '生重'], king_oyster: ['杏鲍菇', '生重'], oyster_mushroom: ['平菇', '生重'],
+  white_mushroom: ['口蘑', '生重'], straw_mushroom: ['草菇', '生重'],
+  wood_ear: ['木耳（干）', '干重'], silver_ear: ['银耳（干）', '干重'], seaweed: ['海带（干）', '干重'], laver: ['紫菜（干）', '干重'],
+  // 油脂调料 fat (17)
   oil: ['食用油', '克重'], soy_sauce: ['酱油', '克重'], oyster_sauce: ['蚝油', '克重'], sesame_oil: ['芝麻油', '克重'],
+  olive_oil: ['橄榄油', '克重'], peanut_oil: ['花生油', '克重'], canola_oil: ['菜籽油', '克重'], coconut_oil: ['椰子油', '克重'],
+  lard: ['猪油', '克重'], butter: ['黄油', '克重'], peanut_butter: ['花生酱', '克重'], sesame_paste: ['芝麻酱', '克重'],
+  sugar: ['白砂糖', '克重'], honey: ['蜂蜜', '克重'], doubanjiang: ['豆瓣酱', '克重'], vinegar: ['食醋', '克重'], ketchup: ['番茄酱', '克重'],
 };
 // 造脏用的替换串：只含字面 '?'，复刻早期那次把非 ASCII 字符整体写成 '?' 的坏写入
 const DIRTY_TEXT = '???';
@@ -341,10 +392,10 @@ function auditRepairedPresets(foods) {
   checkEqual('预设条数不变', presets.length, PRESET_COUNT);
   const wrongName = presets.filter(f => PRESET_NAME_UNIT[f.id] && PRESET_NAME_UNIT[f.id][0] !== f.name)
     .map(f => `${f.id}=${f.name}`);
-  checkEqual('37 条预设品名逐条还原（与 seed.js 一致）', wrongName, []);
+  checkEqual(`${PRESET_COUNT} 条预设品名逐条还原（与 seed.js 一致）`, wrongName, []);
   const wrongUnit = presets.filter(f => PRESET_NAME_UNIT[f.id] && PRESET_NAME_UNIT[f.id][1] !== f.unit)
     .map(f => `${f.id}=${f.unit}`);
-  checkEqual('37 条预设单位徽标逐条还原（unit 列也被写坏过）', wrongUnit, []);
+  checkEqual(`${PRESET_COUNT} 条预设单位徽标逐条还原（unit 列也被写坏过）`, wrongUnit, []);
   checkEqual('预设行无残留字面 ?', presets.filter(f => f.name.includes('?') || f.unit.includes('?')).map(f => f.id), []);
   checkEqual('断言表覆盖全部预设 id（无漏抄）',
     PRESET_COUNT - Object.keys(PRESET_NAME_UNIT).length, 0);
@@ -391,9 +442,9 @@ function auditPresetAnnotations(foods) {
   checkEqual('主食处处有 GI 标注（无意外空值）', emptyGi, []);
   const nonStapleGi = presets.filter(f => f.nature !== 'staple' && f.gi).map(f => f.id);
   checkEqual('非碳水主食不该有 GI（无意外非空）', nonStapleGi, []);
-  // T-128 后主食 12 条（原 9 + 糯玉米 + 红薯（烤），南瓜从蔬菜并入主食），GI 标注数与主食数相等
+  // T-128 后主食 12 条，2026-10-09 扩充到 32 条（新增薯粮豆/面/面包/杂豆等），GI 标注数与主食数相等
   checkEqual('有 GI 标注的预设数 = 主食条数', presets.filter(f => f.gi).length, staples.length);
-  checkEqual('主食条数（含南瓜，不含蔬菜）', staples.length, 12);
+  checkEqual('主食条数（含南瓜，不含蔬菜）', staples.length, STAPLE_COUNT);
 
   const giMismatch = staples.filter(f => EXPECT_GI[f.id] !== undefined && f.gi !== EXPECT_GI[f.id])
     .map(f => f.id + ' 实际' + f.gi + ' 期望' + EXPECT_GI[f.id]);
