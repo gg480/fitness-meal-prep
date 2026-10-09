@@ -4,7 +4,8 @@
 import {
   ADDONS, NATURAL_UNITS, WHEY_SCOOP, QUOTA_TABLE, BMI_ADJUST, CARB_STEP, DAY_TYPES,
   CARB_RATIO, CARB_RATIO_LATE, SLOT_ROLES, MEAL_SLOTS,
-  OUTING_TYPES, OUTING_LEVELS, ALCOHOL_PER_UNIT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER
+  OUTING_TYPES, OUTING_LEVELS, ALCOHOL_PER_UNIT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER,
+  OUTING_PENALTY_KCAL
 } from './constants.js';
 
 export const round1 = n => Math.round(n * 10) / 10;
@@ -386,6 +387,43 @@ export function adjustForOuting(plan, outing) {
       })
     } : null
   });
+}
+
+/* ===== 外食 / 饮酒的后两日补偿缺口（T-130）=====
+ * 与 adjustForOuting（当天把前后两餐压低腾额度）正交的另一个机制：
+ * 登记了外食/喝酒之后，**后两日**（昨天、前天各算一次）的每日目标额外增加一个固定缺口，
+ * 用社交餐那天的「欠账」在未来两天补回来 —— 这是用户原话「记录了外食要在后两日额外增加 300k 缺口、
+ * 饮酒额外增加 100k 缺口」。
+ * 缺口只折成碳水（每 100 kcal ≈ 25g，与有氧置换 cardio.CARB_G_PER_100KCAL 同率，故这里不复引 cardio
+ * 以避免 utils ⇄ cardio 的循环依赖），蛋白脂肪不动 —— 碳水仍是那位博主唯一的日内调节旋钮。
+ * 两天各自独立叠加：昨天 eat + 前天 drink = 300 + 100 = 400 kcal → 碳水 100g。
+ * 返回 kcal = 0 表示无欠账（未登记任何外食/喝酒，调用方可据此整体跳过） */
+
+/* 欠账类型的短标签：与 OUTING_TYPES 对应，供界面提示「前两日登记过外食/饮酒」 */
+export const OUTING_PENALTY_LABEL = { eat: '外食', drink: '饮酒', both: '外食+饮酒' };
+
+/**
+ * 前两日外食/喝酒对今日的补偿缺口（读时派生，与有氧置换同构：删记录即回落）。
+ * @param {object} daylogs  全部日记录 dict（store.daylogs 原样传入）
+ * @param {string} todayKey 'YYYY-MM-DD'（浏览器本地今天）
+ * @returns {{kcal:number, carb:number, days:Array<{offset:number,label:string,type:string,typeLabel:string,kcal:number}>}}
+ *          kcal = 0 表示无欠账
+ */
+export function outingPenaltyOf(daylogs, todayKey) {
+  const days = [];
+  let kcal = 0;
+  for (let off = 1; off <= 2; off++) {
+    const d = new Date(todayKey + 'T00:00:00');
+    d.setDate(d.getDate() - off);
+    const log = daylogs && daylogs[dateKey(d)];
+    const o = log && normOuting(log.outing);
+    if (!o) continue;
+    const v = OUTING_PENALTY_KCAL[o.type] || 0;
+    days.push({ offset: off, label: off === 1 ? '昨日' : '前天', type: o.type, typeLabel: OUTING_PENALTY_LABEL[o.type] || '外食', kcal: v });
+    kcal += v;
+  }
+  if (!kcal) return { kcal: 0, carb: 0, days: [] };
+  return { kcal, carb: Math.round(kcal * 25 / 100), days };
 }
 
 export function calcTotals(items, foods) {

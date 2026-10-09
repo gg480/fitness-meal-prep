@@ -6,7 +6,8 @@ import * as api from './api';
 import { toast } from './toast';
 import {
   calcProfile, calcQuotaProfile, calcTotals, perOf, dailyPreview as dailyOf,
-  deviOf, statusOf, worseOf, dateKey, normDaylog, dayIntake, calcStreak, round1, MEALS_PER_DAY, pickDayType
+  deviOf, statusOf, worseOf, dateKey, normDaylog, dayIntake, calcStreak, round1, MEALS_PER_DAY, pickDayType,
+  outingPenaltyOf
 } from './utils';
 import { cardioSummary } from './cardio';
 import { DEFAULT_PORTIONS, SETTINGS_FALLBACK, DEFAULT_TODAY } from './constants';
@@ -96,16 +97,23 @@ export const cardio = computed(() => cardioSummary(store.cardio, {
   todayKey: dateKey(),
 }));
 
-/* 今日可吃目标 = 原目标 + 有氧置换（每 100 kcal ≈ 25g 碳水，200 kcal ≈ 50g）。
- * 只叠加在展示/目标层：settings 里的配额值一字不动，删掉有氧记录即回落。
+/* 今日可吃目标 = 原目标 + 有氧置换（每 100 kcal ≈ 25g 碳水，200 kcal ≈ 50g）
+ * − 前两日外食/饮酒的补偿缺口（T-130：eat 300 / drink 100 / both 400 kcal，两天独立叠加）。
+ * 只叠加在展示/目标层：settings 里的配额值一字不动，删掉有氧记录或外食记录即回落。
  * T-125 起今日页 / 配方页 / 做饭页与配方页的每日预演（previewState）统一用含置换的目标 ——
  * 备餐时拿到的应是实际可吃量；仅配方库列表（recipeLib）仍按未置换的基础 profile 标红黄绿，
- * 避免「今天多做了一次有氧」把整库改色（库是长期资产，不该被当日状态染色） */
+ * 避免「今天多做了一次有氧」把整库改色（库是长期资产，不该被当日状态染色）。
+ * 外食补偿缺口同样只影响当日实际可吃量：那是「昨天吃多了，今天少补一点」，与库无关 */
+export const outingPenalty = computed(() => outingPenaltyOf(store.daylogs, dateKey()));
+
 export const profileWithCardio = computed(() => {
   const pf = profile.value;
-  const bonus = cardio.value.carbBonus;   // 克碳水；碳水 4 kcal/g，故热量上浮 = 4 × bonus
-  if (!(bonus > 0)) return pf;
-  return Object.assign({}, pf, { c: round1(pf.c + bonus), kcal: Math.round(pf.kcal + bonus * 4) });
+  const bonus = cardio.value.carbBonus;
+  const pen = outingPenalty.value;
+  const c = round1(pf.c + bonus - pen.carb);
+  const kcal = Math.max(0, Math.round(pf.kcal + bonus * 4 - pen.kcal));
+  if (c === pf.c && kcal === pf.kcal) return pf;
+  return Object.assign({}, pf, { c, kcal });
 });
 
 /* 餐次槽位的中文名（契约 §0.3）。放这里而不是 constants.js：本 Sprint 常量文件已被契约冻结，

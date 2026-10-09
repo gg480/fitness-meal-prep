@@ -332,6 +332,13 @@ export const OUTING_TYPES = [
 export const OUTING_MAX_BAIJIU = 50;
 export const OUTING_MAX_BEER = 30;
 
+/* ===== 外食 / 饮酒的后两日补偿缺口（T-130）· 唯一权威常量 =====
+ * 口径（用户原话）：登记了外食，后两日各额外增加 300 kcal 缺口；饮酒，后两日各额外增加 100 kcal 缺口；
+ * 两者都有（'both'）= 400 kcal。缺口按有氧置换的同款换算率折成碳水（每 100 kcal ≈ 25g，
+ * 与 cardio.js 的 CARB_G_PER_100KCAL 同率）—— 只叠加在目标/展示层，settings 配额值一字不动。
+ * 删除那天的外食记录后，后两日的补偿缺口随之消失（读时派生，与有氧置换同构） */
+export const OUTING_PENALTY_KCAL = { eat: 300, drink: 100, both: 400 };
+
 /* 配餐总原则四步（表内原文顺序）：先蛋白 → 脂肪 → 碳水 → 排除。只在今日页展开时展示，
  * 不阻塞任何操作 */
 export const MEAL_GUIDE = [

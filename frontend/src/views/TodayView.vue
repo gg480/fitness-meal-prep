@@ -3,7 +3,7 @@
  * 正餐先在步进器上定份数，点「打卡」时一次性扣库存并生成等量事件后锁定，回撤则全额回补；
  * 蛋白粉/早餐/晚加餐为快捷食材 chips 点选录克数 */
 import { computed, ref, watch } from 'vue';
-import { store, profile, profileWithCardio, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
+import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
 import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting } from '../utils';
@@ -24,9 +24,20 @@ const todayLabel = (now.getMonth() + 1 + '').padStart(2, '0') + '-' +
  * 分包后份数是「全部由备餐锅核销的份数之和」：4 个可分餐次 × 每餐 ≤2 份 = 8，不再旧的 0-4 */
 const MEAL_MAX = 8;
 
-/* 份数步进 0.1（T-111）：份数是「从锅里盛出多少」，1.2 / 2.4 都是真实吃量；
- * 与后端 meals「最多 1 位小数」、分包 0.1 网格同精度 */
-const MEAL_STEP = 0.1;
+/* 份数步进档位（T-130）：1（整数份，默认）与 0.1（小数零头）两档切换。
+ * 日常从「吃了几份」记整数份；0.1 是给真实吃量（1.2 / 2.4）的零头用的。
+ * 1 与 0.1 都在后端 meals 的合法网格上（最多 1 位小数），补录与核销餐次共用同一档位 */
+const mealStep = ref(1);
+
+/* 标准份数提示（T-130）：标准 = 每天 M 份（settings.mealsPerDay），打卡卡给用户
+ * 「餐饮份数 + 标准提示」—— 记到多少、还差多少/超了多少一眼可见 */
+const standardNote = computed(() => {
+  const std = mealsPerDay.value;
+  const cur = store.today.meals;
+  if (cur <= 0) return '今日标准 ' + std + ' 份/天 · 还没记录正餐份数';
+  if (cur >= std) return '今日标准 ' + std + ' 份/天 · 已记录 ' + fmtQty(cur) + ' 份，达标';
+  return '今日标准 ' + std + ' 份/天 · 已记录 ' + fmtQty(cur) + ' 份，还差 ' + fmtQty(std - cur) + ' 份';
+});
 
 const invSum = computed(() => store.inventory.reduce((s, b) => s + b.portions, 0));
 const lowStock = computed(() => invSum.value > 0 && invSum.value <= 2);
@@ -698,7 +709,7 @@ async function saveBackfill() {
         </div>
         <div class="meal-row">
           <span class="inv-name">正餐份数</span>
-          <Stepper :model-value="histLog.meals" :min="0" :max="MEAL_MAX" :step="MEAL_STEP"
+          <Stepper :model-value="histLog.meals" :min="0" :max="MEAL_MAX" :step="mealStep"
             :disabled="histLog.checkedIn" @update:model-value="histLog.meals = $event" />
           <span class="st-hint">份 · 打卡后锁定</span>
         </div>
@@ -861,7 +872,7 @@ async function saveBackfill() {
     <div class="card">
       <div class="card-title">正餐炒饭
         <span v-if="checkedIn" class="done-tag">已打卡</span>
-        <span class="sum-sub">先入先吃 · 队首即当前锅</span>
+        <span class="sum-sub">餐饮份数记录 · 标准 {{ mealsPerDay }} 份/天</span>
       </div>
 
       <!-- 锅位队列：每锅内容/份数/剩余，队首高亮 -->
@@ -886,15 +897,24 @@ async function saveBackfill() {
       </div>
       <button v-else-if="todayWeight.hit" class="btn primary xl" type="button"
         :disabled="checking || store.today.meals <= 0" @click="checkIn">
-        ✅ 今日打卡 · 确认 {{ fmtQty(store.today.meals) }} 份
+        ✅ 打卡 · 记录今日 {{ fmtQty(store.today.meals) }} 份
       </button>
       <p v-else class="st-hint mt16">先录今日体重，再回来打卡</p>
 
       <div class="meal-row mt16">
-        <Stepper :model-value="store.today.meals" :min="0" :max="MEAL_MAX" :step="MEAL_STEP"
+        <Stepper :model-value="store.today.meals" :min="0" :max="MEAL_MAX" :step="mealStep"
           :disabled="checkedIn" @update:model-value="setMeals" />
-        <span class="st-hint">{{ checkedIn ? '已打卡 · 份数锁定（回撤后可改）' : '打卡前定份数（0.1 步进），打卡时按餐次一次性扣库存' }}</span>
+        <span class="st-hint">{{ checkedIn ? '已打卡 · 份数锁定（回撤后可改）' : '份数即记录（1 / 0.1 步进），打卡后锁定并按餐次扣库存' }}</span>
       </div>
+
+      <!-- 份数步进档位（T-130）：1 = 整数份日常记，0.1 = 真实吃量的零头（1.2 / 2.4） -->
+      <div class="seg mt8">
+        <label class="seg-item"><input type="radio" name="mealStep" :checked="mealStep === 1"
+          @change="mealStep = 1"> 步进 1</label>
+        <label class="seg-item"><input type="radio" name="mealStep" :checked="mealStep === 0.1"
+          @change="mealStep = 0.1"> 步进 0.1</label>
+      </div>
+      <p class="addon-note">{{ standardNote }}</p>
 
       <!-- 核销餐次：核销必须带 mealSlot（否则已分包批次的 Σ槽位 与 portions 脱钩），故打卡前把份数分到各餐；
            每行右标该餐的分包余量，超量核销会回退未分包旧批次（后端 fromUnassigned） -->
@@ -903,7 +923,7 @@ async function saveBackfill() {
         <div v-for="r in planRows" :key="r.slot" class="meal-row">
           <span class="inv-name">{{ r.label }}<template v-if="r.role"> · {{ r.role }}</template>
             <template v-if="r.stock"> · {{ fmtQty(r.stock) }} 份已分包</template></span>
-          <Stepper :model-value="slotPlan[r.slot] || 0" :min="0" :max="store.today.meals" :step="MEAL_STEP"
+          <Stepper :model-value="slotPlan[r.slot] || 0" :min="0" :max="store.today.meals" :step="mealStep"
             @update:model-value="setSlotPlan(r.slot, $event)" />
         </div>
         <p class="addon-note" :class="{ 'is-advise': planLeft > 0 }">
@@ -1033,6 +1053,12 @@ async function saveBackfill() {
         以上各餐目标已含今日有氧置换 +{{ cardio.carbBonus }}g 碳水（本周日均 {{ cardio.weekAvgKcal }} kcal 按每 100 kcal 换 25g 折算）；
         置换只叠加在今日环 / 各餐目标 / 当日汇总三处读数上，设置里的配额值 {{ profile.c }}g 未改动。
       </p>
+      <!-- 外食/饮酒的后两日补偿（T-130）：前两日登记过，今天目标额外压低补欠账 -->
+      <p v-if="outingPenalty.kcal" class="addon-note is-advise">
+        前两日登记过{{ outingPenalty.days.map(d => d.label + d.typeLabel).join('、') }}：今日目标额外 −{{ outingPenalty.carb }}g 碳水
+        （≈{{ outingPenalty.kcal }} kcal 缺口，按有氧同款换算每 100 kcal ≈ 25g 碳水）。补偿只叠加在今日目标上，
+        配额值未改；删掉那天的外食记录后立即回落。
+      </p>
     </div>
 
     <!-- 有氧（T-114）：分档建议 → 记录 → 换成可多吃的碳水 → 时机提示 -->
@@ -1040,14 +1066,15 @@ async function saveBackfill() {
 
     <div class="card">
       <div class="card-title">当日汇总
-        <span class="sum-sub">vs 目标 {{ profileWithCardio.kcal }} kcal<template v-if="cardio.carbBonus">（含置换 +{{ cardio.carbBonus }}g 碳水）</template></span>
+        <span class="sum-sub">vs 目标 {{ profileWithCardio.kcal }} kcal<template v-if="cardio.carbBonus">（含置换 +{{ cardio.carbBonus }}g 碳水）</template><template v-if="outingPenalty.kcal">（含外食补偿 −{{ outingPenalty.carb }}g 碳水）</template></span>
       </div>
       <StatBars :intake="todayIntake" :profile="profileWithCardio" />
       <GapRow :intake="todayIntake.kcal" :profile="profileWithCardio" :is-today="true"
         :calc-mode="store.settings.calcMode" />
-      <p v-if="cardio.carbBonus" class="addon-note">
-        今天多吃的额度来自有氧：本周日均 {{ cardio.weekAvgKcal }} kcal → 碳水目标 {{ profile.c }}g + {{ cardio.carbBonus }}g =
-        {{ profileWithCardio.c }}g（配额值未改；删掉有氧记录后数字立即回落）。
+      <p v-if="cardio.carbBonus || outingPenalty.kcal" class="addon-note">
+        <template v-if="cardio.carbBonus">今天多吃的额度来自有氧：本周日均 {{ cardio.weekAvgKcal }} kcal → 碳水 {{ profile.c }}g + {{ cardio.carbBonus }}g</template>
+        <template v-if="outingPenalty.kcal">{{ cardio.carbBonus ? '，' : '' }}再扣前两日外食补偿 −{{ outingPenalty.carb }}g</template>
+        = {{ profileWithCardio.c }}g（配额值未改；删掉对应记录后数字立即回落）。
       </p>
     </div>
 
