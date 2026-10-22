@@ -5,7 +5,7 @@ import {
   ADDONS, NATURAL_UNITS, WHEY_SCOOP, QUOTA_TABLE, BMI_ADJUST, CARB_STEP, DAY_TYPES,
   CARB_RATIO, CARB_RATIO_LATE, SLOT_ROLES, MEAL_SLOTS,
   OUTING_TYPES, OUTING_LEVELS, ALCOHOL_PER_UNIT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER,
-  OUTING_PENALTY_KCAL
+  OUTING_PENALTY_KCAL, OUTING_LEVEL_KCAL
 } from './constants.js';
 
 export const round1 = n => Math.round(n * 10) / 10;
@@ -1107,11 +1107,17 @@ export function sumExtras(list, foods) {
  * 事件数 < 份数的缺口（旧数据 / 手工上调）按 per 快照兜底补齐 */
 export function mealsNutri(log, per) {
   const acc = { kcal: 0, p: 0, c: 0, f: 0 };
+  let counted = 0;
   (log.mealsLog || []).forEach(e => {
+    // T-135：mealsLog 现在混合「计划端核销事件（无 kind）」与「实际端事件（kind: portion/outing）」。
+    // 计划端账本只认前者：实际端的营养由 intakeBreakdown 单独汇总，混进来会双计；
+    // gap = meals − 计划端事件数 的兜底语义对纯旧事件与改造前完全等价（无 kind 事件时 counted === 事件数）
+    if (e.kind) return;
+    counted += 1;
     acc.kcal += Number(e.per.kcal) || 0; acc.p += Number(e.per.p) || 0;
     acc.c += Number(e.per.c) || 0; acc.f += Number(e.per.f) || 0;
   });
-  const gap = (log.meals || 0) - (log.mealsLog || []).length;
+  const gap = (log.meals || 0) - counted;
   if (gap > 0) {
     acc.kcal += per.kcal * gap; acc.p += per.p * gap;
     acc.c += per.c * gap; acc.f += per.f * gap;
@@ -1168,4 +1174,52 @@ export function calcStreak(daylogs, todayKey) {
     else break;
   }
   return streak;
+}
+
+/* ===== 本日实际摄入（T-135）· 实际端账本 =====
+ * 设计文档 §5.4：汇总条「已吃」= 正餐 portion 折算 + 外食折算 + 加餐折算三段。
+ * 刻意不含：旧库存核销事件（计划端账本，混算即双计）、蛋白粉与早餐/晚加餐条目
+ * （机动额度，设计文档未把它们纳入实际端口径） */
+
+/* outing 事件明细（供外食弹层回显与汇总条计数；营养由 outing 列折算承担，不在此求和防双计） */
+export function outingDishesOf(log) {
+  return (log.mealsLog || []).filter(e => e.kind === 'outing');
+}
+
+/* 某槽位的实际份数合计：无事件返回 null（区分「未记录」与「明确没吃 = 0 份」） */
+export function portionOfSlot(log, slot) {
+  const evts = (log.mealsLog || []).filter(e => e.kind === 'portion' && e.slot === slot);
+  if (!evts.length) return null;
+  return Math.round(evts.reduce((s, e) => s + (Number(e.shares) || 0), 0) * 2) / 2;
+}
+
+/* 外食菜品总热量 → 既有三档档位（写 outing.level 用，补偿端零改动） */
+export function levelOfKcal(kcal) {
+  const k = Number(kcal) || 0;
+  if (k <= OUTING_LEVEL_KCAL.light) return 'light';
+  if (k > OUTING_LEVEL_KCAL.big) return 'big';
+  return 'normal';
+}
+
+/* 实际端三段汇总：portion（早/午/晚）+ snack（加餐）+ outing（outing 列折算，明细事件只计数）。
+ * outings 列为 null 时 outing 段为全 0；total = 三段之和（一位小数） */
+export function intakeBreakdown(log) {
+  const zero = () => ({ kcal: 0, p: 0, c: 0, f: 0 });
+  const round10 = (n) => Math.round(n * 10) / 10;
+  const portion = zero();
+  const snack = zero();
+  const dishes = [];
+  (log.mealsLog || []).forEach(e => {
+    if (e.kind === 'outing') { dishes.push(e); return; }
+    if (e.kind !== 'portion') return;
+    const bucket = e.slot === 'snack' ? snack : portion;
+    const n = Number(e.shares) || 0;
+    for (const k of ['kcal', 'p', 'c', 'f']) bucket[k] += (Number(e.per[k]) || 0) * n;
+  });
+  const outing = log.outing ? outingNutri(log.outing) : zero();
+  const total = zero();
+  for (const seg of [portion, snack, outing]) {
+    for (const k of ['kcal', 'p', 'c', 'f']) total[k] = round10(total[k] + seg[k]);
+  }
+  return { portion, snack, outing, total, dishes };
 }

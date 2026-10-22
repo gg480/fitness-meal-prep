@@ -347,3 +347,13 @@ export const MEAL_GUIDE = [
   { step: '③ 最后选碳水', text: '按该餐需要的碳水量选纯碳水（米饭 / 馒头 / 红薯 / 玉米 / 土豆），不要拿糖油混合物顶碳水。' },
   { step: '④ 排除', text: '肥肉、糖油混合物、吸油菜少吃不吃，最多浅尝。' }
 ];
+
+/* ===== 本日实际摄入（T-135）· 唯一权威枚举 =====
+ * PORTION_SLOTS 必须与后端 backend/src/log-events.js 逐值一致（verify/intake-summary-audit 钉住）。
+ * 练前/练后不在「实际」记录粒度里（设计文档 §3.2），实际吃的计划份按早/午/晚主餐时段记账 */
+export const PORTION_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'];
+
+/* 外食档位折算阈值（菜品总热量 → 轻量/普通/大餐）：取三档中心 375/530/840 的档间中值取整。
+ * 按菜品记录外食时用于把「一整桌菜」折回 outing 既有档位口径（OUTING_LEVELS），
+ * 补偿机制 outingPenaltyOf 因此零改动（设计文档 §6） */
+export const OUTING_LEVEL_KCAL = { light: 450, big: 700 };

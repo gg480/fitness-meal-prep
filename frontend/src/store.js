@@ -194,7 +194,10 @@ function sanitizeItems(items) {
  * 份数可为小数（T-111），故缺口按「Σ事件份数」度量而非事件条数——按条数补会把 1.2 补成 2 条，
  * 让未标餐次份数与当日总份数对不上；零头单独用一条按份数折算营养的事件承载 */
 function fillLegacyEvents(today) {
-  const filled = today.mealsLog.reduce((s, e) => s + (Number(e.portions) || 1), 0);
+  // T-135：mealsLog 混入实际端事件（kind: portion/outing）后，占位补齐只看计划端核销事件，
+  // 否则会给 0.5 份/外食明细事件错误地补占位事件，造成口径污染。
+  // 度量口径仍按「Σ事件份数」而非条数（T-111：份数可为小数，按条数会把缺口补错）
+  const filled = (today.mealsLog || []).filter(e => !e.kind).reduce((s, e) => s + (Number(e.portions) || 1), 0);
   let short = round1((today.meals || 0) - filled);
   const per = today.perSnap || latestPer.value;
   while (short > 1e-9) {
