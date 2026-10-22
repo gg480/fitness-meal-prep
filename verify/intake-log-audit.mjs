@@ -69,8 +69,42 @@ section('F. day-logs.js 挂接（源码级）', () => {
   assert.ok(s.includes('normalizeMealsLog'), 'assertMealsLog 应升级为 normalizeMealsLog');
   assert.ok(s.includes("from '../log-events.js'"), 'day-logs 应引入 log-events');
   assert.ok(s.includes('JSON.stringify(normalizeMealsLog('), 'upsert 必须写入归一化后的返回值');
-  // 旧核销事件的存量校验不得松动：无 kind 事件仍要求 ts 与 per.kcal
-  assert.ok(/旧核销|无 kind|普通事件/.test(s), '旧事件路径的校验分支应有注释标记');
+});
+
+/* normalizeMealsLog 无法零依赖 import（day-logs.js 顶部连坐 db.js 会真开库）：
+ * 从源码提取函数体、注入 stub 与真实 log-events 函数后 new Function 执行 —— 行为验证不靠源码字符串匹配 */
+const dayLogsSrc = src('backend/src/routes/day-logs.js');
+const fnBody = (dayLogsSrc.match(/function normalizeMealsLog\(v\) \{([\s\S]*?)\n\}/) || [])[1];
+class HttpErrorStub extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+const normMealsLog = fnBody
+  ? new Function('HttpError', 'PACK_SLOTS', 'normalizePortionEvent', 'normalizeOutingEvent',
+      'return function normalizeMealsLog(v) {' + fnBody + '\n};')(
+        HttpErrorStub,
+        ['breakfast', 'lunch', 'pre', 'post', 'dinner'], // PACK_SLOTS 五值镜像（与 helpers.js 逐值一致）
+        normalizePortionEvent, normalizeOutingEvent)
+  : null;
+
+section('G. 旧核销事件分支行为与改造前等价（无 kind）', () => {
+  assert.ok(normMealsLog, 'day-logs.js 应存在可提取的 normalizeMealsLog 函数');
+  // 数字 ts + 批次字段的旧事件必须原样放行（food-fields/backup 审计的存量口径）
+  const legacy = { ts: 11, batchId: 'b-x', batchName: '审计锅', slot: 'breakfast', per: { kcal: 480, p: 24, c: 72, f: 12 } };
+  assert.deepEqual(normMealsLog([legacy]), [legacy], '旧事件原样放行，存量口径零改动');
+  assert.equal(HTTP(() => normMealsLog([{}])), 400, '缺 per.kcal 仍要 400');
+  assert.equal(HTTP(() => normMealsLog([{ per: { kcal: 100 }, slot: 'snack' }])), 400, '旧事件 slot 仍限 PACK_SLOTS 五值');
+  // kind 显式 null 与缺省等价：仍是旧事件路径（JSON 回写场景不误伤存量）
+  assert.deepEqual(normMealsLog([{ kind: null, ts: 11, per: { kcal: 100 } }]), [{ kind: null, ts: 11, per: { kcal: 100 } }]);
+});
+
+section('H. 未知 kind 拒收（防静默落入旧事件弱校验分支）', () => {
+  const per = { kcal: 100, p: 10, c: 10, f: 10 };
+  assert.equal(HTTP(() => normMealsLog([{ kind: 'Portion', slot: 'lunch', shares: 1, per }])), 400, '拼错大小写要 400');
+  assert.equal(HTTP(() => normMealsLog([{ kind: 'bogus', per }])), 400, '未知 kind 要 400');
+  assert.equal(HTTP(() => normMealsLog([{ kind: 1, per }])), 400, '非字符串 kind 要 400');
+  // 合法 kind 仍正确分派到专项校验并返回归一化结果
+  const ok = normMealsLog([{ kind: 'portion', slot: 'lunch', shares: 1, per }]);
+  assert.equal(ok[0].kind, 'portion', '合法 portion 事件不受拒收影响');
 });
 
 console.log(failed ? `FAIL：${failed} 组断言未通过` : 'PASS：intake-log 审计全绿');

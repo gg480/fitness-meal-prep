@@ -18,14 +18,20 @@ function assertExtras(v, field) {
 
 // T-134 mealsLog 升级为归一化（原 assertMealsLog 只校验不变形）：
 // 每份营养在核销时刻锁定，回溯时不随批次出清漂移。
-// 无 kind 的旧核销事件维持原校验口径一字不动（存量数据零风险）；
+// kind 存在但值非法（拼错大小写等）必须 400 拒收 —— 若静默落入旧事件弱校验分支，
+// 脏 kind 会带着事件原样入库，汇总层按未知 kind 处理时行为不可预期；
+// 无 kind（null/undefined 与缺省等价）的旧核销事件维持原校验口径一字不动（存量数据零风险）；
 // kind:'portion'/'outing' 的新事件走 log-events 专项校验（0.5 步进、slot 枚举、fromDishId）。
 // 返回归一化数组，upsert 直接 JSON.stringify(返回值) 落库；
 // 未传（undefined/null）沿用旧口径允许落 NULL，由调用点短路，本函数只收数组
 function normalizeMealsLog(v) {
   if (!Array.isArray(v)) throw new HttpError(400, 'mealsLog 必须为数组');
   return v.map((e) => {
-    if (e && (e.kind === 'portion' || e.kind === 'outing')) {
+    // kind 字段存在（null/undefined 视为无 kind 的存量事件）即走专项通道，未知值一律 400
+    if (e && e.kind != null) {
+      if (e.kind !== 'portion' && e.kind !== 'outing') {
+        throw new HttpError(400, `未知的 mealsLog 事件类型 kind：${e.kind}`);
+      }
       try {
         return e.kind === 'portion' ? normalizePortionEvent(e) : normalizeOutingEvent(e);
       } catch (ex) {
