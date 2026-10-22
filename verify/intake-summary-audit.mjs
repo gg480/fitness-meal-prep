@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 
 import { PORTION_SLOTS as FE_SLOTS, OUTING_LEVEL_KCAL } from '../frontend/src/constants.js';
 import { PORTION_SLOTS as BE_SLOTS } from '../backend/src/log-events.js';
-import { mealsNutri, intakeBreakdown, portionOfSlot, levelOfKcal, dishesTotalKcal, mergeOutingForDishes } from '../frontend/src/utils.js';
+import { mealsNutri, intakeBreakdown, portionOfSlot, levelOfKcal, dishesTotalKcal, mergeOutingForDishes, canAddHalf } from '../frontend/src/utils.js';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const src = (p) => readFileSync(path.join(repo, p), 'utf8');
@@ -123,6 +123,20 @@ section('G. 按菜品记录的类型合并与折档收整（T-137 fix）', () =>
     'onDishesConfirm 必须经 mergeOutingForDishes 合并类型，硬写 type:eat 会清掉已登记酒量');
   assert.ok(src('frontend/src/components/OutingDishSheet.vue').includes('dishesTotalKcal'),
     '弹层合计与确认折档必须共用 dishesTotalKcal，两处口径不分叉');
+});
+
+section('H. 行内 +0.5 上限口径（T-138 fix：加餐无 UI 上限）', () => {
+  // 主餐槽位 0~2 份：2 份封顶，1.5 还能加
+  assert.equal(canAddHalf('dinner', 1.5), true);
+  assert.equal(canAddHalf('dinner', 2), false);
+  assert.equal(canAddHalf('breakfast', null), true, '未记（null）按 0 算，可以加');
+  // 加餐不设上限：用户明示机动额度自控，多少份都能继续 +0.5
+  assert.equal(canAddHalf('snack', 2), true);
+  assert.equal(canAddHalf('snack', 10), true);
+  assert.equal(canAddHalf('snack', null), true);
+  // 源码级：行内实际区的 disabled 必须经 canAddHalf（防止两处上限口径再分叉）
+  assert.ok(src('frontend/src/views/TodayView.vue').includes('canAddHalf'),
+    '行内实际区 +0.5 的 disabled 必须走 canAddHalf 纯函数，与加餐卡共用同一上限口径');
 });
 
 console.log(failed ? `FAIL：${failed} 组断言未通过` : 'PASS：intake-summary 审计全绿');

@@ -1193,6 +1193,14 @@ export function portionOfSlot(log, slot) {
   return Math.round(evts.reduce((s, e) => s + (Number(e.shares) || 0), 0) * 2) / 2;
 }
 
+/* 行内实际区 +0.5 的上限口径（T-138 fix）：主餐槽位 0~2 份封顶；
+ * 加餐（snack）是机动额度、用户明示不设上限（纪律自控），恒可加。
+ * 抽成纯函数：行内实际区与加餐卡共用，防止两处上限口径分叉（verify H 项钉住） */
+export function canAddHalf(slot, shares) {
+  if (slot === 'snack') return true;
+  return (Number(shares) || 0) < 2;
+}
+
 /* 外食菜品总热量 → 既有三档档位（写 outing.level 用，补偿端零改动） */
 export function levelOfKcal(kcal) {
   const k = Number(kcal) || 0;

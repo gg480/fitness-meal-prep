@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, intakeBreakdown, portionOfSlot, createSaveQueue, dishesTotalKcal, mergeOutingForDishes } from '../utils';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, intakeBreakdown, portionOfSlot, canAddHalf, createSaveQueue, dishesTotalKcal, mergeOutingForDishes } from '../utils';
 import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS, DAILY_ROWS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
@@ -883,6 +883,9 @@ async function saveBackfill() {
           剩余 {{ intakeBar.rest[row.key] }}{{ row.unit === 'kcal' ? ' kcal' : 'g' }}
         </span>
       </div>
+      <!-- 口径副注（T-138 fix）：与今日环/当日汇总卡的 todayIntake（另含乳清、早餐/晚加餐食材、计划端账本）是两个各有用途的口径，
+           数字不同不是算错 —— 必须明说，否则同页两处「已吃」会被当成一处 -->
+      <p class="intake-bar-note">口径：按各餐核销、外食折算、加餐记录计；乳清与早餐/晚加餐食材计入下方「当日汇总」卡。</p>
     </div>
 
     <div v-if="lowStock" class="fifo">
@@ -1146,13 +1149,13 @@ async function saveBackfill() {
           <span v-if="m.cut" class="inv-meta mono">原 C{{ m.baseC }} P{{ m.baseP }} F{{ m.baseF }}</span>
           <span v-if="m.alloc" class="inv-meta mono">分包 {{ fmtQty(m.alloc) }} 份</span>
           <span class="bar-badge" :class="m.done.cls">{{ m.done.text }}</span>
-          <!-- T-136 实际区：0.5 份步进（0~2 份）+ 没吃快捷键 + 偏差色。计划端与实际端并存互不覆盖 -->
+          <!-- T-136 实际区：0.5 份步进（主餐 0~2 份封顶，snack 无上限——T-138 fix 对齐加餐口径）+ 没吃快捷键 + 偏差色。计划端与实际端并存互不覆盖 -->
           <div v-if="PORTION_SLOTS.includes(m.slot)" class="intake-row">
             <span class="intake-label">实际</span>
             <button class="mini-btn" type="button" :disabled="(portionOf(m.slot) ?? 0) <= 0"
               @click="setPortion(m.slot, (portionOf(m.slot) ?? 0) - 0.5)">−0.5</button>
             <span class="intake-shares">{{ portionOf(m.slot) == null ? '未记' : portionOf(m.slot) + ' 份' }}</span>
-            <button class="mini-btn" type="button" :disabled="(portionOf(m.slot) ?? 0) >= 2"
+            <button class="mini-btn" type="button" :disabled="!canAddHalf(m.slot, portionOf(m.slot))"
               @click="setPortion(m.slot, (portionOf(m.slot) ?? 0) + 0.5)">+0.5</button>
             <button class="mini-btn" type="button" :disabled="portionOf(m.slot) === 0" @click="markNotEaten(m.slot)">没吃</button>
             <span v-if="devClassOf(m.slot)" :class="['dev', devClassOf(m.slot)]">{{ devTextOf(m.slot) }}</span>
@@ -1212,8 +1215,9 @@ async function saveBackfill() {
         <button class="mini-btn" type="button"
           @click="setPortion('snack', (snackShares ?? 0) + 0.5)">+0.5</button>
         <button class="mini-btn" type="button" @click="markNotEaten('snack')">没吃</button>
-        <!-- kcal 展示层收整：intakeBreakdown 各段不做收整（审计 D 项钉住原始值），页面 kcal 一律 Math.round -->
-        <span class="dev dev-none">{{ Math.round(breakdown.snack.kcal) }} kcal</span>
+        <!-- kcal 展示层收整：intakeBreakdown 各段不做收整（审计 D 项钉住原始值），页面 kcal 一律 Math.round；
+             未记（无事件）显示「未记」而不是 0 kcal —— 0 是「没吃」的事实，null 是「还没记」 -->
+        <span class="dev dev-none">{{ snackShares == null ? '未记' : Math.round(breakdown.snack.kcal) + ' kcal' }}</span>
       </div>
     </div>
 
@@ -1292,4 +1296,5 @@ async function saveBackfill() {
 .intake-bar-unit { color: var(--muted, #888); }
 .intake-bar-rest { margin-left: auto; }
 .bar-over { color: #b45309; font-weight: 600; }
+.intake-bar-note { font-size: 12px; color: var(--muted, #888); margin: 0; }
 </style>
