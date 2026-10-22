@@ -6,8 +6,8 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot, createSaveQueue, dishesTotalKcal, mergeOutingForDishes } from '../utils';
-import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS } from '../constants';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, intakeBreakdown, portionOfSlot, createSaveQueue, dishesTotalKcal, mergeOutingForDishes } from '../utils';
+import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS, DAILY_ROWS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
 import GapRow from '../components/GapRow.vue';
@@ -224,6 +224,25 @@ function markNotEaten(slot) {
   store.today.mealsLog = rest;
   persistToday();
 }
+
+/* ===== T-138 汇总条与加餐（设计文档 §5.3 / §5.4）===== */
+
+/* 实际端三段汇总：已吃 = portion（早/午/晚）+ outing 列折算 + snack，不含计划端账本（防双计） */
+const breakdown = computed(() => intakeBreakdown(store.today));
+
+/* 加餐实际份数：null = 未记，0 = 明确没吃；步进无 UI 上限（后端 shares 上限 20 挡脏值） */
+const snackShares = computed(() => portionOfSlot(store.today, 'snack'));
+
+/* 汇总条：已吃 vs 配额 vs 剩余（剩余 = 配额 − 已吃，可为负=超吃；一位小数）。
+ * 配额取 profileWithCardio（今日四宏目标：含配额引擎 + 外食补偿 + 有氧置换的最终值，
+ * 与当日汇总卡同一来源） */
+const intakeBar = computed(() => {
+  const quota = profileWithCardio.value;
+  const eaten = breakdown.value.total;
+  const rest = {};
+  for (const k of ['kcal', 'p', 'c', 'f']) rest[k] = Math.round((quota[k] - eaten[k]) * 10) / 10;
+  return { eaten, quota, rest };
+});
 
 /* 外食餐次选项取「基准分餐」的餐次：锚点必须落在当天结构里，否则「前后两餐」找不到位置 */
 const outingSlotOpts = computed(() => basePlan.value.meals
@@ -854,6 +873,18 @@ async function saveBackfill() {
       </div>
     </div>
 
+    <!-- T-138 汇总条（设计文档 §5.4）：已吃（实际端三段：portion+outing 折算+snack）vs 配额（最终目标）vs 剩余 -->
+    <div class="intake-bar">
+      <div v-for="row in DAILY_ROWS" :key="row.key" class="intake-bar-row">
+        <span class="intake-bar-label">{{ row.label }}</span>
+        <span class="intake-bar-eaten">已吃 {{ intakeBar.eaten[row.key] }}</span>
+        <span class="intake-bar-unit">/ 配额 {{ intakeBar.quota[row.key] }}{{ row.unit === 'kcal' ? ' kcal' : 'g' }}</span>
+        <span :class="['intake-bar-rest', intakeBar.rest[row.key] < 0 ? 'bar-over' : '']">
+          剩余 {{ intakeBar.rest[row.key] }}{{ row.unit === 'kcal' ? ' kcal' : 'g' }}
+        </span>
+      </div>
+    </div>
+
     <div v-if="lowStock" class="fifo">
       <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
       <span>库存仅剩 <b>{{ invSum }}</b> 份，约明天中午见底 —— 建议今明两天开新一锅</span>
@@ -1166,6 +1197,26 @@ async function saveBackfill() {
       </p>
     </div>
 
+    <!-- T-138 加餐卡片（设计文档 §5.3）：snack 是四槽位之一，0.5 步进、无 UI 上限；
+         per 仍取每份计划营养快照（latestPer），口径与主餐一致 -->
+    <div class="card snack-card">
+      <div class="snack-head">
+        <span>加餐</span>
+        <span class="sum-sub">机动额度（rest 日碳水 10% 的抵扣口径）</span>
+      </div>
+      <div class="intake-row">
+        <span class="intake-label">实际</span>
+        <button class="mini-btn" type="button" :disabled="(snackShares ?? 0) <= 0"
+          @click="setPortion('snack', (snackShares ?? 0) - 0.5)">−0.5</button>
+        <span class="intake-shares">{{ snackShares == null ? '未记' : snackShares + ' 份' }}</span>
+        <button class="mini-btn" type="button"
+          @click="setPortion('snack', (snackShares ?? 0) + 0.5)">+0.5</button>
+        <button class="mini-btn" type="button" @click="markNotEaten('snack')">没吃</button>
+        <!-- kcal 展示层收整：intakeBreakdown 各段不做收整（审计 D 项钉住原始值），页面 kcal 一律 Math.round -->
+        <span class="dev dev-none">{{ Math.round(breakdown.snack.kcal) }} kcal</span>
+      </div>
+    </div>
+
     <!-- 有氧（T-114）：分档建议 → 记录 → 换成可多吃的碳水 → 时机提示 -->
     <CardioCard />
 
@@ -1230,4 +1281,15 @@ async function saveBackfill() {
 .dev-ok { color: var(--ok, #1a7f37); }
 .dev-over { color: var(--warn, #b45309); }
 .dev-none { color: var(--text-faint, #9aa0a6); }
+
+/* T-138 加餐卡片与汇总条（设计文档 §5.3 / §5.4） */
+.snack-card { margin-top: 10px; }
+.snack-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.intake-bar { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.intake-bar-row { display: flex; gap: 10px; font-size: 13px; align-items: baseline; flex-wrap: wrap; }
+.intake-bar-label { font-weight: 600; min-width: 40px; }
+.intake-bar-eaten { color: var(--accent, #2f6fed); }
+.intake-bar-unit { color: var(--muted, #888); }
+.intake-bar-rest { margin-left: auto; }
+.bar-over { color: #b45309; font-weight: 600; }
 </style>
