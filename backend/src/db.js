@@ -123,6 +123,22 @@ db.exec(`
     bodyweight_kg REAL,                  -- 当日体重快照：补录日/漏称日 join weights 会断点，快照换确定性
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
+
+  -- T-133 外食菜品库（本日实际摄入模块 · 设计文档 §3.1）：常去店家的常点菜，
+  -- 营养值为「一整份」口径（点餐按份选，不做克数换算）。IF NOT EXISTS 保证老库自动补建，
+  -- 与 cardio_logs / 训练两表同款的新表策略，无需迁移函数
+  CREATE TABLE IF NOT EXISTS eatery_dishes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    eatery TEXT NOT NULL DEFAULT '',
+    slot TEXT NOT NULL DEFAULT '',
+    kcal REAL NOT NULL DEFAULT 0,
+    p REAL NOT NULL DEFAULT 0,
+    c REAL NOT NULL DEFAULT 0,
+    f REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS idx_eatery_dishes_eatery ON eatery_dishes (eatery);
 `);
 
 // 轻量迁移：老库 day_logs 缺 per_snap/batch_name/meals_log/satiety/checked_in 列时补建

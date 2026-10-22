@@ -8,6 +8,8 @@ import recipesRouter from './routes/recipes.js';
 import settingsRouter from './routes/settings.js';
 import inventoryRouter from './routes/inventory.js';
 import dayLogsRouter from './routes/day-logs.js';
+// T-133 外食菜品库：外食弹层按店取菜 / 新菜当场新增 / 删除误录
+import eateryDishesRouter from './routes/eatery-dishes.js';
 import weightsRouter from './routes/weights.js';
 import cardioRouter from './routes/cardio.js';
 import ruleStateRouter from './routes/rule-state.js';
@@ -25,6 +27,8 @@ app.use('/api/recipes', recipesRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/day-logs', dayLogsRouter);
+// T-133 外食菜品库路由（本日实际摄入模块 · 设计文档 §3.1）
+app.use('/api/eatery-dishes', eateryDishesRouter);
 app.use('/api/weights', weightsRouter);
 app.use('/api/cardio', cardioRouter);
 app.use('/api/rule-state', ruleStateRouter);

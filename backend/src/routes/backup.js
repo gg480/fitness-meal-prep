@@ -74,6 +74,11 @@ function exportData() {
         weight: r.weight, loadTag: r.load_tag, rir: r.rir, toFailure: r.to_failure,
         bodyweightKg: r.bodyweight_kg, createdAt: r.created_at,
       })),
+    // T-133 外食菜品库：导出成与 GET /api/eatery-dishes 同形的 camelCase 对象（而非库列名），
+    // 与其他表同口径；缺了会让外食弹层在恢复后变空
+    eatery_dishes: db.prepare('SELECT * FROM eatery_dishes ORDER BY id').all()
+      .map((r) => ({ id: r.id, name: r.name, eatery: r.eatery, slot: r.slot,
+        kcal: r.kcal, p: r.p, c: r.c, f: r.f, createdAt: r.created_at })),
     // 备份格式版本（SPEC 7.9）：旧备份无此键 = 导入时按「缺表跳过、缺列补默认」兼容
     schema_version: 3,
     __exportedAt: new Date().toISOString(),
@@ -111,6 +116,8 @@ const BACKUP_COLUMNS = {
   workout_logs: ['id', 'date', 'plan_key', 'slot', 'note', 'created_at'],
   workout_sets: ['id', 'workout_id', 'exercise_key', 'set_no', 'reps', 'weight',
     'load_tag', 'rir', 'to_failure', 'bodyweight_kg', 'created_at'],
+  // T-133 外食菜品库：九列全量进白名单，漏了会让外食弹层在"导出→导入"后变空
+  eatery_dishes: ['id', 'name', 'eatery', 'slot', 'kcal', 'p', 'c', 'f', 'created_at'],
 };
 
 /* 启动自检：真实表结构里出现白名单之外的列，说明有人加了字段却忘了进备份，导入导出会丢它。
@@ -255,6 +262,19 @@ function writeWorkoutSets(data) {
   }
 }
 
+function writeEateryDishes(data) {
+  const ins = db.prepare(`INSERT INTO eatery_dishes
+    (id, name, eatery, slot, kcal, p, c, f, created_at)
+    VALUES (@id, @name, @eatery, @slot, @kcal, @p, @c, @f, @createdAt)`);
+  for (const d of data.eatery_dishes) {
+    // slot / createdAt 旧备份缺键时落空串，与列默认态同口径（SPEC 7.9「缺列补默认」）
+    ins.run({
+      id: d.id, name: d.name, eatery: d.eatery, slot: d.slot || '',
+      kcal: d.kcal, p: d.p, c: d.c, f: d.f, createdAt: d.createdAt || '',
+    });
+  }
+}
+
 /* 表名 → 写入器。键域即 BACKUP_COLUMNS 的表名，导入时的 DELETE 表名也取自这里（非用户输入） */
 function importWriters(data) {
   return {
@@ -271,6 +291,8 @@ function importWriters(data) {
     // 即"缺表跳过"，符合 SPEC 7.9 的旧备份兼容
     workout_logs: () => writeWorkoutLogs(data),
     workout_sets: () => writeWorkoutSets(data),
+    // T-133 外食菜品库：无外键依赖，重灌顺序不敏感
+    eatery_dishes: () => writeEateryDishes(data),
   };
 }
 
