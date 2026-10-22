@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { wrap, HttpError, PACK_SLOTS, MEAL_SLOTS } from '../helpers.js';
+// T-134 本日实际摄入事件：零依赖校验模块；其带 status 的 Error 在 normalizeMealsLog 内转译为 HttpError
+import { normalizePortionEvent, normalizeOutingEvent } from '../log-events.js';
 
 const router = Router();
 
@@ -14,19 +16,31 @@ function assertExtras(v, field) {
   }
 }
 
-// 核销事件流校验：可选数组，元素 {ts,batchId,batchName,slot?,per:{kcal,p,c,f}}；
+// T-134 mealsLog 升级为归一化（原 assertMealsLog 只校验不变形）：
 // 每份营养在核销时刻锁定，回溯时不随批次出清漂移。
-// slot 可选（旧事件无此字段，保留为缺省由前端展示"未指定餐次"），给了必须落在可分包的五个餐次内
-function assertMealsLog(v) {
-  if (v === undefined || v === null) return;
+// 无 kind 的旧核销事件维持原校验口径一字不动（存量数据零风险）；
+// kind:'portion'/'outing' 的新事件走 log-events 专项校验（0.5 步进、slot 枚举、fromDishId）。
+// 返回归一化数组，upsert 直接 JSON.stringify(返回值) 落库；
+// 未传（undefined/null）沿用旧口径允许落 NULL，由调用点短路，本函数只收数组
+function normalizeMealsLog(v) {
   if (!Array.isArray(v)) throw new HttpError(400, 'mealsLog 必须为数组');
-  for (const e of v) {
+  return v.map((e) => {
+    if (e && (e.kind === 'portion' || e.kind === 'outing')) {
+      try {
+        return e.kind === 'portion' ? normalizePortionEvent(e) : normalizeOutingEvent(e);
+      } catch (ex) {
+        // log-events 是零依赖模块（verify 直接 import），这里把带 status 的 Error 转译成 HttpError
+        throw new HttpError(ex.status || 400, ex.message);
+      }
+    }
+    // ---- 旧核销事件（无 kind）：与改造前 assertMealsLog 逐条等价，存量口径不得松动 ----
     if (!e || typeof e !== 'object') throw new HttpError(400, 'mealsLog 条目必须为对象');
     if (!e.per || !Number.isFinite(Number(e.per.kcal))) throw new HttpError(400, 'mealsLog 条目缺每份营养');
     if (e.slot != null && !PACK_SLOTS.includes(e.slot)) {
       throw new HttpError(400, 'mealsLog 条目的 slot 只允许 breakfast/lunch/pre/post/dinner');
     }
-  }
+    return e;
+  });
 }
 
 // 打卡 body 校验：meals 0-8（分包后 4 个可分餐次 × 每餐 ≤2 份）且最多 1 位小数、
@@ -97,7 +111,7 @@ function assertLogBody(body) {
   if (!Number.isFinite(Number(body.consumed)) || Number(body.consumed) < 0) {
     throw new HttpError(400, 'consumed 必须为非负数字');
   }
-  assertMealsLog(body.mealsLog);
+  // mealsLog 的校验+归一化在落库参数处一次完成（T-134）：归一化返回值直接落库，不重复遍历
   assertOuting(body.outing);
   if (Number(body.satiety) < 0 || Number(body.satiety) > 5) {
     throw new HttpError(400, 'satiety 必须为 0-5');
@@ -123,12 +137,7 @@ function normalizeSnap(v) {
   return (s && Number.isFinite(s.kcal)) ? JSON.stringify({ kcal: s.kcal, p: s.p || 0, c: s.c || 0, f: s.f || 0 }) : null;
 }
 
-// meals_log 期望为事件数组，逐条滤掉缺营养的坏条目后批 JSON 存
-function normalizeMealsLog(v) {
-  if (!Array.isArray(v)) return null;
-  const ok = v.filter(e => e && e.per && Number.isFinite(Number(e.per.kcal)));
-  return ok.length ? JSON.stringify(ok) : null;
-}
+// （旧 normalizeMealsLog 过滤器已并入上方归一化版本 T-134：坏条目由校验直接 400，不再静默滤除）
 
 const rowToLog = (row) => {
   const parse = (v) => {
@@ -192,7 +201,11 @@ router.put('/:date', wrap((req, res) => {
     breakfast: JSON.stringify(body.breakfast), late: JSON.stringify(body.late),
     consumed: Number(body.consumed),
     per_snap: normalizeSnap(body.perSnap), batch_name: String(body.batchName || ''),
-    meals_log: normalizeMealsLog(body.mealsLog),
+    // T-134：归一化会补 ts / 规整 per 数值类型，落库必须用返回值而非原始 body；
+    // 未传（undefined/null）与空数组沿用旧口径落 NULL（旧过滤器对二者的返回都是 null）
+    meals_log: body.mealsLog == null || (Array.isArray(body.mealsLog) && !body.mealsLog.length)
+      ? null
+      : JSON.stringify(normalizeMealsLog(body.mealsLog)),
     satiety: Math.max(0, Math.min(5, Number(body.satiety) || 0)),
     checked_in: Number(body.checkedIn) ? 1 : 0,
     day_type: dayType,
