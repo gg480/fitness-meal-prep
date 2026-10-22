@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot } from '../utils';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot, createSaveQueue } from '../utils';
 import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
@@ -472,9 +472,12 @@ function removeAddon(kind, i) {
   persistToday();
 }
 
-/* 打卡持久化：仅存记录（正餐库存已在 checkIn / undoCheckIn 同步完成），不再触发 consume。
- * mealsLog 深拷贝避免与 store.today 共享数组引用 */
-async function persistToday() {
+/* 打卡持久化（T-136 审查修复：串行化）：仅存记录（正餐库存已在 checkIn / undoCheckIn 同步完成），
+ * 不再触发 consume。mealsLog 深拷贝避免与 store.today 共享数组引用。
+ * stepper 高频连点会并发多个 PUT，乱序响应会把旧数据覆盖新数据 —— 全部保存过 enqueueSave 链排队：
+ * 后一次发出前必等前一次完成；payload 在出队时构造（取当刻 store.today），排队窗口内的中间态合并为最新，
+ * 服务端最终值恒 = 本地最后一次状态。单次失败吞掉不阻断（既有口径），链不断 */
+const enqueueSave = createSaveQueue(async () => {
   const t = store.today;
   const per = latestPer.value;
   t.perSnap = { kcal: per.kcal, p: per.p, c: per.c, f: per.f };
@@ -485,6 +488,9 @@ async function persistToday() {
   try {
     await api.saveDayLog(dateKey(), t);
   } catch (err) { /* 打卡记录保存失败不阻断界面汇总 */ }
+});
+function persistToday() {
+  return enqueueSave();
 }
 
 /* busy 防连点重入：打卡/回撤都打后端，连点会双扣或双补 */
@@ -1087,7 +1093,7 @@ async function saveBackfill() {
             <span class="intake-shares">{{ portionOf(m.slot) == null ? '未记' : portionOf(m.slot) + ' 份' }}</span>
             <button class="mini-btn" type="button" :disabled="(portionOf(m.slot) ?? 0) >= 2"
               @click="setPortion(m.slot, (portionOf(m.slot) ?? 0) + 0.5)">+0.5</button>
-            <button class="mini-btn" type="button" @click="markNotEaten(m.slot)">没吃</button>
+            <button class="mini-btn" type="button" :disabled="portionOf(m.slot) === 0" @click="markNotEaten(m.slot)">没吃</button>
             <span v-if="devClassOf(m.slot)" :class="['dev', devClassOf(m.slot)]">{{ devTextOf(m.slot) }}</span>
             <span v-else-if="portionOf(m.slot) != null" class="dev dev-none">{{ devTextOf(m.slot) }}</span>
           </div>
@@ -1187,8 +1193,8 @@ async function saveBackfill() {
 .mini-btn { border: 1px solid var(--line, #ddd); border-radius: 6px; background: none; padding: 2px 8px; font-size: 12px; cursor: pointer; }
 .mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .dev { font-size: 12px; }
-.dev-under { color: #9aa0a6; }
-.dev-ok { color: #1a7f37; }
-.dev-over { color: #b45309; }
-.dev-none { color: #9aa0a6; }
+.dev-under { color: var(--text-faint, #9aa0a6); }
+.dev-ok { color: var(--ok, #1a7f37); }
+.dev-over { color: var(--warn, #b45309); }
+.dev-none { color: var(--text-faint, #9aa0a6); }
 </style>

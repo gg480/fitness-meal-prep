@@ -1201,6 +1201,19 @@ export function levelOfKcal(kcal) {
   return 'normal';
 }
 
+/* ===== 保存串行队列（T-136 审查修复）=====
+ * stepper 高频连点会并发多个 PUT，乱序响应会让旧数据覆盖新数据（前后端分叉）。
+ * 所有保存过同一条 promise 链排队：后一次发出前必等前一次完成，服务端最终值 = 最后一次出队的 payload；
+ * run 在出队时才执行（TodayView 里 payload 取当刻 store.today），排队窗口内的中间态天然合并为最新。
+ * 单次 run 抛错只吞当次（与「保存失败不阻断界面汇总」既有口径一致），链不断、后续修改仍可保存 */
+export function createSaveQueue(run) {
+  let chain = Promise.resolve();
+  return function enqueue() {
+    chain = chain.then(run).catch(() => { /* 单次保存失败不阻断后续保存 */ });
+    return chain;
+  };
+}
+
 /* 实际端三段汇总：portion（早/午/晚）+ snack（加餐）+ outing（outing 列折算，明细事件只计数）。
  * outings 列为 null 时 outing 段为全 0；total = 三段之和（一位小数） */
 export function intakeBreakdown(log) {
