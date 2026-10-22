@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot, createSaveQueue, levelOfKcal } from '../utils';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot, createSaveQueue, dishesTotalKcal, mergeOutingForDishes } from '../utils';
 import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
@@ -147,16 +147,15 @@ function clearOuting() {
 
 /* ===== T-137 外食菜品弹层：确认落账（设计文档 §5.2）=====
  * 确认时做两件事——
- * ① 写 outing 列：type 固定 'eat'、level 由菜品总热量折档（levelOfKcal），酒量字段不动；
+ * ① 写 outing 列：类型经 mergeOutingForDishes 合并（已有饮酒记录时升为 both 保留酒量，
+ *    禁止硬写 'eat'——normOuting 读回时会把酒量清零）；level 由菜品总热量收整后折档；
  * ② mealsLog 里为每道菜落一条 kind:'outing' 事件（fromDishId + name + 整份营养快照），
  *    明细只作回显与计数，营养由 outing 列折算承担（intakeBreakdown 已做防双计）。
  * 保存走 persistToday 的串行队列：与 stepper 连点同一通道，乱序响应不会旧盖新 */
 const showDishSheet = ref(false);
 
 function onDishesConfirm({ slot, dishes }) {
-  const totalKcal = dishes.reduce((s, d) => s + (Number(d.kcal) || 0), 0);
-  const outing = { ...(store.today.outing || { baijiu: 0, beer: 0, slot }),
-    type: 'eat', level: levelOfKcal(totalKcal), slot };
+  const outing = { ...mergeOutingForDishes(store.today.outing, dishesTotalKcal(dishes)), slot };
   const rest = store.today.mealsLog.filter(e => e.kind !== 'outing');
   const ts = new Date().toISOString();
   for (const d of dishes) {

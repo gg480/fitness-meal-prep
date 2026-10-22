@@ -1201,6 +1201,29 @@ export function levelOfKcal(kcal) {
   return 'normal';
 }
 
+/* ===== 按菜品记录外食（T-137 fix）· 两件纯计算 ===== */
+
+/* 菜品热量合计：折档前必须 round1 收整——裸浮点连加会带 450.000…03 式残渣，
+ * 恰过 light(450) 档间值时折错档；弹层显示合计与确认折档共用本函数，两处口径不分叉 */
+export function dishesTotalKcal(dishes) {
+  return round1((dishes || []).reduce((s, d) => s + (Number(d && d.kcal) || 0), 0));
+}
+
+/* 落账 outing 的类型合并：外食点菜与饮酒可同日共存（T-130 补偿口径 eat/drink/both 齐备）——
+ * 既有 drink → both 保留酒量；both → 保持 both；无记录/eat → eat（酒量恒 0）。
+ * 硬写 type:'eat' 会让 normOuting 读回时把已录酒量清零（静默丢失用户数据）。
+ * level 一律由菜品总热量折档：both 时 outingNutri = 酒量折算 + 档位折算，档位只代表外食部分 */
+export function mergeOutingForDishes(existing, totalKcal) {
+  const prev = normOuting(existing);
+  const keep = !!prev && (prev.type === 'drink' || prev.type === 'both');
+  return {
+    type: keep ? 'both' : 'eat',
+    level: levelOfKcal(totalKcal),
+    baijiu: keep ? prev.baijiu : 0,
+    beer: keep ? prev.beer : 0,
+  };
+}
+
 /* ===== 保存串行队列（T-136 审查修复）=====
  * stepper 高频连点会并发多个 PUT，乱序响应会让旧数据覆盖新数据（前后端分叉）。
  * 所有保存过同一条 promise 链排队：后一次发出前必等前一次完成，服务端最终值 = 最后一次出队的 payload；

@@ -6,6 +6,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { MEAL_SLOTS } from '../constants';
 import { store, SLOT_LABEL } from '../store';
 import { toast } from '../toast';
+import { dishesTotalKcal } from '../utils';
 import { fetchEateryDishes, addEateryDish } from '../api';
 
 const props = defineProps({ show: { type: Boolean, default: false } });
@@ -44,9 +45,10 @@ const currentGroup = computed(() =>
   store.eateryDishes.find(g => g.eatery === eateryName.value) || { dishes: [] });
 const currentDishes = computed(() => currentGroup.value.dishes);
 
-/* 选中明细（对象列表，供确认时带营养快照）与热量合计（仅统计当前店勾选项） */
+/* 选中明细（对象列表，供确认时带营养快照）与热量合计（仅统计当前店勾选项；
+ * 合计走 dishesTotalKcal 收整，与确认折档同一口径，防裸浮点恰过档间值折错档） */
 const picked = computed(() => currentDishes.value.filter(d => pickedIds.value.includes(d.id)));
-const pickedKcal = computed(() => picked.value.reduce((s, d) => s + (Number(d.kcal) || 0), 0));
+const pickedKcal = computed(() => dishesTotalKcal(picked.value));
 
 /* 新菜表单可保存条件（必填校验前置，与 CustomFoodForm 的 required 同意图）：
  * 菜名与店家必填；营养四项必须显式填了非负数字（留空不算 0 —— 静默按 0 记会污染折档） */

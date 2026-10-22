@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 
 import { PORTION_SLOTS as FE_SLOTS, OUTING_LEVEL_KCAL } from '../frontend/src/constants.js';
 import { PORTION_SLOTS as BE_SLOTS } from '../backend/src/log-events.js';
-import { mealsNutri, intakeBreakdown, portionOfSlot, levelOfKcal } from '../frontend/src/utils.js';
+import { mealsNutri, intakeBreakdown, portionOfSlot, levelOfKcal, dishesTotalKcal, mergeOutingForDishes } from '../frontend/src/utils.js';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const src = (p) => readFileSync(path.join(repo, p), 'utf8');
@@ -91,6 +91,38 @@ section('F. 折档阈值与 portionOfSlot', () => {
     { ts: 'b', kind: 'portion', slot: 'lunch', shares: 0.5, per },
   ] }, 'lunch'), 1.5);
   assert.equal(portionOfSlot({ mealsLog: [] }, 'lunch'), null, '无事件返回 null（区分未记与没吃）');
+});
+
+section('G. 按菜品记录的类型合并与折档收整（T-137 fix）', () => {
+  // 无既有记录 → eat：酒量恒 0，level 由菜品折档
+  assert.deepEqual(mergeOutingForDishes(null, 600), { type: 'eat', level: 'normal', baijiu: 0, beer: 0 });
+  // 既有 drink → both：酒量原样保留（正是修复点——硬写 'eat' 会被 normOuting 清掉酒量，静默丢数据）
+  const afterDrink = mergeOutingForDishes(
+    { type: 'drink', level: null, baijiu: 1.5, beer: 2, slot: 'dinner' }, 300);
+  assert.equal(afterDrink.type, 'both');
+  assert.deepEqual([afterDrink.baijiu, afterDrink.beer], [1.5, 2]);
+  // 既有 both → 保持 both：酒量保留、档位按菜品更新
+  assert.deepEqual(mergeOutingForDishes({ type: 'both', level: 'light', baijiu: 1, beer: 0 }, 800),
+    { type: 'both', level: 'big', baijiu: 1, beer: 0 });
+  // 既有 eat → 保持 eat，档位刷新
+  assert.deepEqual(mergeOutingForDishes({ type: 'eat', level: 'big', baijiu: 0, beer: 0 }, 300),
+    { type: 'eat', level: 'light', baijiu: 0, beer: 0 });
+  // 折档前必须收整：真实和恰 450（light 档间值）的连加，裸浮点是 450.000…03 → 裸折错成 normal
+  const parts = Array.from({ length: 4495 }, () => 0.1).concat([0.5]);
+  const raw = parts.reduce((s, k) => s + k, 0);
+  assert.ok(raw > 450, '前置：该连加的裸浮点和必须真的越界（用例失效需换组合）');
+  assert.equal(levelOfKcal(raw), 'normal', '裸折档确实翻车（证明修复必要性）');
+  const dishObjs = parts.map(kcal => ({ kcal }));
+  assert.equal(dishesTotalKcal(dishObjs), 450);
+  assert.equal(levelOfKcal(dishesTotalKcal(dishObjs)), 'light');
+  // 脏值容错：非数字/缺字段/null 元素按 0
+  assert.equal(dishesTotalKcal([{ kcal: 'x' }, {}, null]), 0);
+  assert.equal(dishesTotalKcal(null), 0);
+  // 源码级：落账必须经 mergeOutingForDishes（禁硬编码 type:'eat'）；合计必须走 dishesTotalKcal
+  assert.ok(src('frontend/src/views/TodayView.vue').includes('mergeOutingForDishes'),
+    'onDishesConfirm 必须经 mergeOutingForDishes 合并类型，硬写 type:eat 会清掉已登记酒量');
+  assert.ok(src('frontend/src/components/OutingDishSheet.vue').includes('dishesTotalKcal'),
+    '弹层合计与确认折档必须共用 dishesTotalKcal，两处口径不分叉');
 });
 
 console.log(failed ? `FAIL：${failed} 组断言未通过` : 'PASS：intake-summary 审计全绿');
