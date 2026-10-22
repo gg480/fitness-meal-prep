@@ -556,7 +556,7 @@ CREATE TABLE IF NOT EXISTS workout_sets (
 
 - **`day_logs` 表结构不动**：`meals_log` JSON 事件流内扩两类新事件（老库幂等）：
   - **`kind:'portion'`（分餐核销）**：`{ ts, kind:'portion', slot, shares, per:{kcal,p,c,f} }`。`slot` ∈ `PORTION_SLOTS = ['breakfast','lunch','dinner','snack']`（后端 `backend/src/log-events.js` 为权威定义，前端 `constants.js` 镜像导出，verify 钉住逐值一致）；`shares` **0.5 步进**，后端校验范围 0–20（0 = 明确没吃）；`per` = 记录时刻「每份」计划营养快照（克数口径：每份非整锅，取今日页既有每份营养 computed `latestPer`，含 perSnap 兜底）。
-  - **`kind:'outing'`（外食明细）**：`{ ts, kind:'outing', slot, fromDishId, name, per:{kcal,p,c,f} }`。`fromDishId` → `eatery_dishes.id`；`per` = 确认时刻**整份**菜品营养快照（菜品库后来改值/删除不影响已落账历史）；`slot` ∈ `MEAL_SLOTS` 六值（既有）；折档 `OUTING_LEVEL_KCAL = { light: 450, big: 700 }`——菜品总 kcal ≤450 → light，>700 → big，否则 normal，折算结果写进 `outing.level`，补偿端零改动（外食走既有补偿机制，后两日缺口自动生效）。
+  - **`kind:'outing'`（外食明细）**：`{ ts, kind:'outing', slot, fromDishId, name, per:{kcal,p,c,f} }`。`fromDishId` → `eatery_dishes.id`；`per` = 确认时刻**整份**菜品营养快照（菜品库后来改值/删除不影响已落账历史）；`slot` ∈ `OUTING_SLOTS` 五值（lunch/pre/post/dinner/snack，拒 breakfast）；折档 `OUTING_LEVEL_KCAL = { light: 450, big: 700 }`——菜品总 kcal ≤450 → light，>700 → big，否则 normal，折算结果写进 `outing.level`，补偿端零改动（外食走既有补偿机制，后两日缺口自动生效）。
 - **唯一新表 `eatery_dishes`（外食菜品库）**：列 `id, name, eatery, slot, kcal, p, c, f, created_at`；营养值为「一整份」口径；`(name, eatery)` 视为同一条目 → POST 走 upsert 去重。DDL `CREATE TABLE IF NOT EXISTS` 幂等，老库首启自动补建、历史数据原样可读；**必须进 `backup.js` 备份白名单三处齐备**（BACKUP_COLUMNS / exportData / 写入器 + importWriters），启动自检 `auditBackupCoverage()` 不得报红。
 - **0.5 步进判定**：`isHalfStep()` 用 `×2 取整` 容差法，禁止 `n % 0.5 === 0`（浮点陷阱）。
 
