@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot, createSaveQueue } from '../utils';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot, createSaveQueue, levelOfKcal } from '../utils';
 import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
@@ -14,6 +14,7 @@ import GapRow from '../components/GapRow.vue';
 import FoodNatureNotice from '../components/FoodNatureNotice.vue';
 import CardioCard from '../components/CardioCard.vue';
 import CalendarSheet from '../components/CalendarSheet.vue';
+import OutingDishSheet from '../components/OutingDishSheet.vue';
 
 const weekCn = ['日', '一', '二', '三', '四', '五', '六'];
 const now = new Date();
@@ -139,7 +140,33 @@ function setOutingType(type) {
 /* 删除记录：一删就回落 —— 各餐目标回到未登记时的原值（逐值相等，由 verify/outing-audit 守住） */
 function clearOuting() {
   store.today.outing = null;
+  // T-137：删除外食记录要连 outing 明细事件一起清，否则弹层回显残留、汇总条计数不清零
+  store.today.mealsLog = (store.today.mealsLog || []).filter(e => e.kind !== 'outing');
   persistToday();
+}
+
+/* ===== T-137 外食菜品弹层：确认落账（设计文档 §5.2）=====
+ * 确认时做两件事——
+ * ① 写 outing 列：type 固定 'eat'、level 由菜品总热量折档（levelOfKcal），酒量字段不动；
+ * ② mealsLog 里为每道菜落一条 kind:'outing' 事件（fromDishId + name + 整份营养快照），
+ *    明细只作回显与计数，营养由 outing 列折算承担（intakeBreakdown 已做防双计）。
+ * 保存走 persistToday 的串行队列：与 stepper 连点同一通道，乱序响应不会旧盖新 */
+const showDishSheet = ref(false);
+
+function onDishesConfirm({ slot, dishes }) {
+  const totalKcal = dishes.reduce((s, d) => s + (Number(d.kcal) || 0), 0);
+  const outing = { ...(store.today.outing || { baijiu: 0, beer: 0, slot }),
+    type: 'eat', level: levelOfKcal(totalKcal), slot };
+  const rest = store.today.mealsLog.filter(e => e.kind !== 'outing');
+  const ts = new Date().toISOString();
+  for (const d of dishes) {
+    rest.push({ ts, kind: 'outing', slot, fromDishId: d.id, name: d.name,
+      per: { kcal: Number(d.kcal) || 0, p: Number(d.p) || 0, c: Number(d.c) || 0, f: Number(d.f) || 0 } });
+  }
+  store.today.outing = outing;
+  store.today.mealsLog = rest;
+  persistToday();
+  showDishSheet.value = false;
 }
 
 /* ===== T-136 本日实际摄入：portion 事件（设计文档 §5.1）=====
@@ -862,6 +889,8 @@ async function saveBackfill() {
         <button class="btn ghost sm" type="button" @click="setOutingType('eat')">今天要外食</button>
         <button class="btn ghost sm" type="button" @click="setOutingType('drink')">今天要喝酒</button>
         <button class="btn ghost sm" type="button" @click="setOutingType('both')">外食 + 喝酒</button>
+        <!-- T-137 按菜品记录外食：选店→选菜→确认，折算回既有 outing 档位口径 -->
+        <button class="btn ghost sm" type="button" @click="showDishSheet = true">按菜品记录</button>
       </div>
 
       <template v-else>
@@ -927,6 +956,8 @@ async function saveBackfill() {
           「全天配额 − 前后两餐能腾出的额度」，前后两餐已压到 0 仍不够。今天剩下的餐次请以蛋白与蔬菜为主。
         </p>
         <div class="btn-row mt16">
+          <!-- T-137：已登记态同样给按菜品记录入口（粗档位登记后仍可细化为菜品明细） -->
+          <button class="btn ghost sm" type="button" @click="showDishSheet = true">按菜品记录</button>
           <button class="btn ghost sm" type="button" @click="clearOuting">删除记录（各餐目标回落）</button>
         </div>
       </template>
@@ -1173,6 +1204,9 @@ async function saveBackfill() {
 
     <!-- 共用日历（训练页 / 今日页同一入口）：只允许选今天及以前的日期 -->
     <CalendarSheet :show="showCal" :max="dateKey()" @select="enterHistory" @close="showCal = false" />
+
+    <!-- T-137 外食菜品弹层（挂在根节点下，与共用日历并列） -->
+    <OutingDishSheet :show="showDishSheet" @close="showDishSheet = false" @confirm="onDishesConfirm" />
   </section>
 </template>
 

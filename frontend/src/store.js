@@ -26,6 +26,7 @@ export const store = reactive({
   training: { active: false, planKey: null }, // 训练进行中标志：今日页状态条与训练页共用
   ruleState: { ignored: {}, history: [] },
   today: Object.assign({}, DEFAULT_TODAY),
+  eateryDishes: [],                    // T-137 外食菜品库缓存（按店分组 [{ eatery, dishes: [...] }]）：initStore 拉一次，弹层内新增后由组件刷新
   recipe: { id: null, name: '', portions: DEFAULT_PORTIONS, items: {}, locked: [], mealAllocation: {} },
   packPortions: DEFAULT_PORTIONS,
   packAllocation: {},                  // 本次分装的餐次归属（与 packPortions 配对，登记入库时随批次落库）
@@ -244,6 +245,8 @@ export async function initStore() {
     store.packAllocation = Object.assign({}, store.recipe.mealAllocation);
     store.today = normDaylog(daylogs[dateKey()]);
     fillLegacyEvents(store.today);
+    // T-137 外食菜品库：拉取失败不阻塞启动（弹层打开时还会再刷一次）
+    try { store.eateryDishes = await api.fetchEateryDishes(); } catch { store.eateryDishes = []; }
     store.ready = true;
   } catch (err) {
     toast('数据加载失败，请刷新页面重试');

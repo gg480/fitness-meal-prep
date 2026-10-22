@@ -242,3 +242,21 @@ export async function exportAll() {
 export async function importAll(text) {
   return req('POST', '/backup', JSON.parse(text));
 }
+
+/* ===== 外食菜品库（T-137）===== */
+
+/* 按店分组列表 [{ eatery, dishes: [{id,name,eatery,slot,kcal,p,c,f,createdAt}] }]；
+ * 营养值是「一整份」口径 */
+export async function fetchEateryDishes() {
+  return req('GET', '/eatery-dishes');
+}
+
+/* 新增/更新（后端同名+同店 upsert）：重复提交同一道菜返回同一条 id */
+export async function addEateryDish(dish) {
+  return req('POST', '/eatery-dishes', dish);
+}
+
+/* 删除误录的菜品：已落账的历史外食事件自带营养快照，删菜品不影响已记录历史 */
+export async function deleteEateryDish(id) {
+  return req('DELETE', '/eatery-dishes/' + encodeURIComponent(id));
+}
