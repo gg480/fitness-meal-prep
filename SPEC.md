@@ -1,4 +1,4 @@
-# 一锅出 · 备餐管理器 — 技术规格 SPEC v3.2
+# 一锅出 · 备餐管理器 — 技术规格 SPEC v3.3
 
 > 本文件是前后端开发的唯一契约。v2 依据更新后的 PRD（五页架构：今日/配方/做饭/记录/设置）；v2.1 落地五项实施顾问需求；v2.2 落地「锅位可视化 + 事件化核销 + 成就感体系」；v2.3 修复配方保存的数据丢失缺陷；v2.4 把逐份核销重构为「一次性打卡 + 回撤」；v2.5 把配方页改为「结构化配方 + 目标导向微调」；v2.6 对齐「好人松松」减脂方法论（配额模式 + 餐次分包 + 小数份核销 + 食物性质）；v3.0 新增「训练安排体系」（力量课表轮换 + 组次日志 + 日类型读时派生 + 补打卡与指标线分版落地，见第 7 章）。
 
@@ -545,4 +545,35 @@ CREATE TABLE IF NOT EXISTS workout_sets (
 | v3.1.0 | 补打卡（训练+饮食历史日期模式）+ 组间倒计时 + 活动量双环 + 进阶提示 | 同上 + 补录横幅/徽章实测 |
 | v3.2.0 | 动作指引动图库（ExerciseDB 免费非商用动图打进 bundle + 中文要点；训练前列表缩略图 / 训练中「指引▶」/ 弹窗大图+要点） | 同上 + 三展示点真机实测，Console 零错误 |
 | P2 冻结 | 晨脉趋势、力量线、语音（观察门满 4 周再议）、deload 自动化、课表自定义、free-exercise-db 全量导入 | — |
+
+---
+
+## 8. 本日实际摄入记录（v3.3 建）
+
+> 定位：补齐「实际端」账本——每餐实际吃了几份（0.5 份一档）、外食按菜品明细、加餐独立记录。记录归记录、缺口照算：**配额引擎与外食补偿（`outingPenaltyOf`，frontend/src/utils.js）零改动**；**计划端与实际端是两本账，互不穿透**——`mealsNutri` / `fillLegacyEvents` 只认无 `kind` 的旧核销事件，`intakeBreakdown` 只认 `kind` 事件，混算即双计。
+
+### 8.1 数据模型
+
+- **`day_logs` 表结构不动**：`meals_log` JSON 事件流内扩两类新事件（老库幂等）：
+  - **`kind:'portion'`（分餐核销）**：`{ ts, kind:'portion', slot, shares, per:{kcal,p,c,f} }`。`slot` ∈ `PORTION_SLOTS = ['breakfast','lunch','dinner','snack']`（后端 `backend/src/log-events.js` 为权威定义，前端 `constants.js` 镜像导出，verify 钉住逐值一致）；`shares` **0.5 步进**，后端校验范围 0–20（0 = 明确没吃）；`per` = 记录时刻「每份」计划营养快照（克数口径：每份非整锅，取今日页既有每份营养 computed `latestPer`，含 perSnap 兜底）。
+  - **`kind:'outing'`（外食明细）**：`{ ts, kind:'outing', slot, fromDishId, name, per:{kcal,p,c,f} }`。`fromDishId` → `eatery_dishes.id`；`per` = 确认时刻**整份**菜品营养快照（菜品库后来改值/删除不影响已落账历史）；`slot` ∈ `MEAL_SLOTS` 六值（既有）；折档 `OUTING_LEVEL_KCAL = { light: 450, big: 700 }`——菜品总 kcal ≤450 → light，>700 → big，否则 normal，折算结果写进 `outing.level`，补偿端零改动（外食走既有补偿机制，后两日缺口自动生效）。
+- **唯一新表 `eatery_dishes`（外食菜品库）**：列 `id, name, eatery, slot, kcal, p, c, f, created_at`；营养值为「一整份」口径；`(name, eatery)` 视为同一条目 → POST 走 upsert 去重。DDL `CREATE TABLE IF NOT EXISTS` 幂等，老库首启自动补建、历史数据原样可读；**必须进 `backup.js` 备份白名单三处齐备**（BACKUP_COLUMNS / exportData / 写入器 + importWriters），启动自检 `auditBackupCoverage()` 不得报红。
+- **0.5 步进判定**：`isHalfStep()` 用 `×2 取整` 容差法，禁止 `n % 0.5 === 0`（浮点陷阱）。
+
+### 8.2 API 契约（前缀 /api，响应包裹同第 3 节）
+
+- `POST /api/day-logs`（既有 upsert）扩展：接受 `meals_log` 中的 `portion` 事件与 `outing.fromDishId`；后端做 0.5 步进（`isHalfStep`）与 `slot` 枚举校验，违反 → 400。
+- `eatery_dishes` CRUD：按店分组返回；POST 按 `(name, eatery)` upsert（同条目更新营养值而非新增）。
+
+### 8.3 前端规格（今日页）
+
+1. **每餐卡「实际」区**：计划份数展示 + stepper（−0.5 / +0.5，范围 0~2 份）+「没吃」快捷键；核销后显示「已吃 X 份 / 计划 Y 份」与偏差色（**不足=灰、达标=绿、超出=橙**；仅当该槽位有 portion 事件且当日分包可知 `mealAllocation[slot]` 才判色，未记/未分包不给色）。
+2. **外食入口**：每餐卡「外食」按钮 → 弹层选店 → 选菜品（可多选）→ 确认落账；库里没有则当场新增（表单复用 CustomFoodForm 模式）。
+3. **加餐卡**：今日页独立卡片，同 stepper 记录，**不设上限、不占正餐配额、不参与配额引擎与补偿计算**（减脂纪律由用户自控）。
+4. **顶部汇总条**：「已吃 vs 配额 vs 剩余」三段口径 = `portion`（早/午/晚）+ `outing` 列折算 + snack；**不含**旧库存核销事件（无 kind）、蛋白粉、早餐/晚加餐条目（计划端与实际端两本账，混算即双计）。
+
+### 8.4 验收与明确不做
+
+- **验收**：verify 断言（eatery_dishes CRUD upsert 去重、0.5 步进校验、slot 枚举校验、加餐不进补偿、portion+outing 混合日的汇总计算）+ 真实老库冒烟 + Playwright 实点（每餐核销、外食新店新菜、加餐、次日晚餐目标增加即补偿生效）。
+- **明确不做（YAGNI）**：称重/克数级记录、拍照 AI、条码、买菜清单、外食精确定位、加餐上限。
 
