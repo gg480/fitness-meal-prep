@@ -6,8 +6,8 @@ import { computed, ref, watch } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting } from '../utils';
-import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER } from '../constants';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, portionOfSlot } from '../utils';
+import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
 import GapRow from '../components/GapRow.vue';
@@ -139,6 +139,63 @@ function setOutingType(type) {
 /* 删除记录：一删就回落 —— 各餐目标回到未登记时的原值（逐值相等，由 verify/outing-audit 守住） */
 function clearOuting() {
   store.today.outing = null;
+  persistToday();
+}
+
+/* ===== T-136 本日实际摄入：portion 事件（设计文档 §5.1）=====
+ * 计划端（库存核销/分包）与实际端并存，互不覆盖：这里只读写带 kind:'portion' 的事件 */
+
+/* 某槽位实际份数：无事件 = null（未记录），有事件 = 0~N（0 = 明确没吃） */
+const portionOf = (slot) => portionOfSlot(store.today, slot);
+
+/* 计划份数：分包时取该餐分到的份数；未分包返回 null（计划份数无餐次归属，偏差色不可判）。
+ * mealAllocation 值形兼容两种历史形状：纯数字或 { portions } */
+const planSharesOf = (slot) => {
+  const a = store.recipe && store.recipe.mealAllocation ? store.recipe.mealAllocation[slot] : null;
+  const n = typeof a === 'number' ? a : Number(a && a.portions);
+  return Number.isFinite(n) ? n : null;
+};
+
+/* 偏差色（设计文档 §5.1：不足灰 / 达标绿 / 超出橙；未记或未分包不给色） */
+const devClassOf = (slot) => {
+  const cur = portionOf(slot);
+  if (cur == null) return null;
+  const plan = planSharesOf(slot);
+  if (plan == null) return null;
+  if (cur < plan) return 'dev-under';
+  if (cur > plan) return 'dev-over';
+  return 'dev-ok';
+};
+const devTextOf = (slot) => {
+  const cur = portionOf(slot);
+  const plan = planSharesOf(slot);
+  if (cur == null) return '未记';
+  if (plan == null) return `已吃 ${cur} 份`;
+  if (cur < plan) return `不足 ${cur}/${plan}`;
+  if (cur > plan) return `超出 ${cur}/${plan}`;
+  return `达标 ${cur}/${plan}`;
+};
+
+/* 写入实际份数：per 取记录时刻的每份营养快照（latestPer 含 perSnap 兜底）——
+ * 记录的是「这一份计划饭」的营养（克数口径：每份），后续批次重灌不改已记录历史。
+ * shares 减到 0 视为撤回记录（移除事件）；「没吃」快捷键才落 shares:0 事件（固化事实） */
+function setPortion(slot, shares) {
+  const v = Math.round((Number(shares) || 0) * 2) / 2;
+  const rest = store.today.mealsLog.filter(e => !(e.kind === 'portion' && e.slot === slot));
+  if (v > 0) {
+    rest.push({ ts: new Date().toISOString(), kind: 'portion', slot, shares: v,
+      per: { kcal: latestPer.value.kcal, p: latestPer.value.p, c: latestPer.value.c, f: latestPer.value.f } });
+  }
+  store.today.mealsLog = rest;
+  persistToday();
+}
+
+/* 「没吃」快捷键：落 shares:0 事件，把「没吃」固化为可回看的事实（区别于不记录） */
+function markNotEaten(slot) {
+  const rest = store.today.mealsLog.filter(e => !(e.kind === 'portion' && e.slot === slot));
+  rest.push({ ts: new Date().toISOString(), kind: 'portion', slot, shares: 0,
+    per: { kcal: latestPer.value.kcal, p: latestPer.value.p, c: latestPer.value.c, f: latestPer.value.f } });
+  store.today.mealsLog = rest;
   persistToday();
 }
 
@@ -1022,6 +1079,18 @@ async function saveBackfill() {
           <span v-if="m.cut" class="inv-meta mono">原 C{{ m.baseC }} P{{ m.baseP }} F{{ m.baseF }}</span>
           <span v-if="m.alloc" class="inv-meta mono">分包 {{ fmtQty(m.alloc) }} 份</span>
           <span class="bar-badge" :class="m.done.cls">{{ m.done.text }}</span>
+          <!-- T-136 实际区：0.5 份步进（0~2 份）+ 没吃快捷键 + 偏差色。计划端与实际端并存互不覆盖 -->
+          <div v-if="PORTION_SLOTS.includes(m.slot)" class="intake-row">
+            <span class="intake-label">实际</span>
+            <button class="mini-btn" type="button" :disabled="(portionOf(m.slot) ?? 0) <= 0"
+              @click="setPortion(m.slot, (portionOf(m.slot) ?? 0) - 0.5)">−0.5</button>
+            <span class="intake-shares">{{ portionOf(m.slot) == null ? '未记' : portionOf(m.slot) + ' 份' }}</span>
+            <button class="mini-btn" type="button" :disabled="(portionOf(m.slot) ?? 0) >= 2"
+              @click="setPortion(m.slot, (portionOf(m.slot) ?? 0) + 0.5)">+0.5</button>
+            <button class="mini-btn" type="button" @click="markNotEaten(m.slot)">没吃</button>
+            <span v-if="devClassOf(m.slot)" :class="['dev', devClassOf(m.slot)]">{{ devTextOf(m.slot) }}</span>
+            <span v-else-if="portionOf(m.slot) != null" class="dev dev-none">{{ devTextOf(m.slot) }}</span>
+          </div>
         </li>
       </ul>
       <!-- T-126 关闭的餐次：行不出现，得解释一句，并把「去哪改」指出来 -->
@@ -1110,4 +1179,16 @@ async function saveBackfill() {
 .bf-check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; font-weight: 700;
   flex-wrap: wrap; }
 .bf-check .sum-sub { font-weight: 400; }
+
+/* T-136 实际区：计划行内的小工具条与三态偏差色（不足灰/达标绿/超出橙，设计文档 §5.1） */
+.intake-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.intake-label { font-size: 12px; color: var(--muted, #888); flex: none; }
+.intake-shares { font-size: 12px; min-width: 44px; text-align: center; }
+.mini-btn { border: 1px solid var(--line, #ddd); border-radius: 6px; background: none; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.dev { font-size: 12px; }
+.dev-under { color: #9aa0a6; }
+.dev-ok { color: #1a7f37; }
+.dev-over { color: #b45309; }
+.dev-none { color: #9aa0a6; }
 </style>
