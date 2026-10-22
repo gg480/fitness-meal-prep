@@ -15,7 +15,10 @@ function rowToDish(r) {
 }
 
 // 输入校验：菜名/店名 1-30 字；slot 是「惯用餐次」提示，取六餐枚举（可空）；
-// 营养值必须是非负有限数，kcal 上限 3000 只挡脏值（单菜超 3000 已不是"一份"的语义）
+// 营养值必须是非负有限数，上限只挡脏值：kcal 3000 与 p/c/f 500g 都是「一整份」的物理常识上限
+// （一斤纯蛋白质/纯碳水的单份菜不存在），超限即说明单位填错或手滑多打零，按份拆菜才合理
+const KCAL_MAX = 3000;
+const GRAM_MAX = 500;
 function assertDishInput(b) {
   const name = String(b.name || '').trim();
   if (!name || name.length > 30) throw new HttpError(400, '菜名必填且不超过 30 字');
@@ -26,7 +29,8 @@ function assertDishInput(b) {
   const num = (k) => {
     const v = Number(b[k]);
     if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `营养值 ${k} 必须是非负数字`);
-    if (k === 'kcal' && v > 3000) throw new HttpError(400, '单份热量上限 3000 kcal，请按份拆菜');
+    const max = k === 'kcal' ? KCAL_MAX : GRAM_MAX;
+    if (v > max) throw new HttpError(400, `单份 ${k} 上限 ${max}${k === 'kcal' ? ' kcal' : ' g'}，请按份拆菜`);
     return v;
   };
   return { name, eatery, slot, kcal: num('kcal'), p: num('p'), c: num('c'), f: num('f') };

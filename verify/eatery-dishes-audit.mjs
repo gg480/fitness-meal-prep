@@ -47,6 +47,11 @@ section('C. upsert 先查后写（同名同店视为同条目）', () => {
   const s = src('backend/src/routes/eatery-dishes.js');
   assert.ok(s.includes('WHERE name = ? AND eatery = ?'), 'upsert 必须按 name+eatery 查重');
   assert.ok(s.includes('UPDATE eatery_dishes') && s.includes('INSERT INTO eatery_dishes'), 'UPDATE/INSERT 两条路径都要有');
+  // p/c/f 与 kcal 同口径的份量上限（审查修复）：kcal 有 3000 上限但 p/c/f 原先只有非负校验，
+  // p=1e6 这类脏值可入库；断言营养校验走统一的「kcal 3000 / 克数 500」常量分流
+  assert.ok(s.includes('const KCAL_MAX = 3000') && s.includes('const GRAM_MAX = 500')
+    && s.includes("k === 'kcal' ? KCAL_MAX : GRAM_MAX"),
+  'p/c/f 缺少与 kcal 同风格的上限校验');
 });
 
 section('D. 备份三处齐备', () => {
