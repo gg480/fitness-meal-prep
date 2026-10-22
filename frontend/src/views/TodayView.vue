@@ -1145,7 +1145,7 @@ async function saveBackfill() {
     <div class="card">
       <div class="card-title">各餐目标 <span class="sum-sub">{{ dayTypeText }}</span></div>
       <ul class="inv-list">
-        <li v-for="m in mealRows" :key="m.slot">
+        <li v-for="m in mealRows" :key="m.slot" class="meal-row">
           <span class="inv-name">{{ m.label }}</span>
           <span v-if="m.role" class="badge big">{{ m.role }}</span>
           <span class="inv-meta mono">碳水 {{ Math.round(m.carbRatio * 100) }}%</span>
@@ -1284,6 +1284,10 @@ async function saveBackfill() {
 .intake-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .intake-label { font-size: 12px; color: var(--muted, #888); flex: none; }
 .intake-shares { font-size: 12px; min-width: 44px; text-align: center; }
+/* 餐名绝不能被压缩：全局 .inv-name 的 flex:1（basis:0）在实际区塞进来后被定宽元素挤到 0 宽，
+   「早饭/晚饭」整词消失只剩省略号（窄屏实拍复现）。改为不收缩 + 超出整体换行 */
+.meal-row { flex-wrap: wrap; row-gap: 2px; }
+.meal-row .inv-name { flex: 0 0 auto; max-width: 44%; }
 .mini-btn { border: 1px solid var(--line, #ddd); border-radius: 6px; background: none; padding: 2px 8px; font-size: 12px; cursor: pointer; }
 .mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .dev { font-size: 12px; }
