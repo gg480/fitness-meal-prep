@@ -139,5 +139,48 @@ section('H. 行内 +0.5 上限口径（T-138 fix：加餐无 UI 上限）', () =
     '行内实际区 +0.5 的 disabled 必须走 canAddHalf 纯函数，与加餐卡共用同一上限口径');
 });
 
+/* ===== T-139 跨任务集成缺陷（打卡/回撤吞实际端事件 + 三处计划端过滤缺失）===== */
+
+section('I. 打卡/回撤只动计划端事件（源码级，High）', () => {
+  const s = src('frontend/src/views/TodayView.vue');
+  // checkIn：不得用 acc.detail.map 整体替换 mealsLog——打卡前记录的 portion/outing 会被静默吞掉
+  assert.ok(!/mealsLog\s*=\s*acc\.detail\.map/.test(s),
+    'checkIn 不得整体替换 mealsLog，实际端事件（kind:portion/outing）必须原样保留');
+  assert.ok(/mealsLog\s*=\s*store\.today\.mealsLog\.filter\(\s*e\s*=>\s*e\.kind\s*\)[\s\S]{0,60}?concat\(/.test(s),
+    'checkIn 必须先保留带 kind 的实际端事件，再拼接新核销事件');
+  // undoCheckIn：不得清空全部事件——回撤只能清计划端核销事件
+  assert.ok(!/mealsLog\s*=\s*\[\]\s*;/.test(s),
+    'undoCheckIn 不得把 mealsLog 清成空数组，否则回撤也吞掉实际端事件');
+  assert.ok(/mealsLog\s*=\s*store\.today\.mealsLog\.filter\(\s*e\s*=>\s*e\.kind\s*\)\s*;/.test(s),
+    'undoCheckIn 必须保留带 kind 的实际端事件');
+});
+
+section('J. slotDone 完成度只认计划端事件（源码级）', () => {
+  const s = src('frontend/src/views/TodayView.vue');
+  const at = s.indexOf('const slotDone = computed');
+  assert.ok(at > 0, 'TodayView 应存在 slotDone');
+  const body = s.slice(at, at + 500);
+  assert.ok(/if\s*\(\s*!e\.kind\s*&&\s*e\.slot\s*\)/.test(body),
+    'slotDone 遍历 mealsLog 必须过滤带 kind 的实际端事件，否则打卡后记 portion/outing 会双计各餐完成度');
+});
+
+section('K. 份数守恒行只统计计划端事件（源码级）', () => {
+  const s = src('frontend/src/views/TodayView.vue');
+  const at = s.indexOf('const sumPortions');
+  assert.ok(at > 0, 'TodayView 应存在 sumPortions');
+  const body = s.slice(at, at + 500);
+  assert.ok(/!e\.kind\s*&&\s*!e\.slot/.test(body) && /!e\.kind\s*&&\s*e\.slot/.test(body),
+    '已核销/未标餐次份数必须排除实际端事件——kind 事件无 portions 字段，会被「|| 1」按 1 份虚增守恒行');
+});
+
+section('L. 记录页 groupPots 过滤实际端事件（源码级）', () => {
+  const s = src('frontend/src/views/LogView.vue');
+  const at = s.indexOf('function groupPots');
+  assert.ok(at > 0, 'LogView 应存在 groupPots');
+  const body = s.slice(at, s.indexOf('\n}', at));
+  assert.ok(/filter\(\s*e\s*=>\s*!e\.kind\s*\)/.test(body),
+    'groupPots 必须过滤带 kind 的实际端事件——portion/outing 无 batchName，会聚成「未命名锅×N」幻影');
+});
+
 console.log(failed ? `FAIL：${failed} 组断言未通过` : 'PASS：intake-summary 审计全绿');
 process.exit(failed ? 1 : 0);

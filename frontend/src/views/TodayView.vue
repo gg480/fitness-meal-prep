@@ -334,7 +334,8 @@ const slotDone = computed(() => {
     const a = acc[slot] || (acc[slot] = { p: 0, c: 0, f: 0 });
     a.p += n.p; a.c += n.c; a.f += n.f;
   };
-  store.today.mealsLog.forEach(e => { if (e.slot) add(e.slot, e.per); });
+  // T-139：只认计划端核销事件（无 kind）——portion/outing 事件也带 slot，混进来会双计各餐完成度
+  store.today.mealsLog.forEach(e => { if (!e.kind && e.slot) add(e.slot, e.per); });
   add('breakfast', sumExtras(listOf('breakfast'), store.foods));
   add('snack', sumExtras(listOf('late'), store.foods));
   return acc;
@@ -487,8 +488,9 @@ watch(() => store.today.meals, v => {
 /* 已核销份数：一份事件未必等于一份实物（分包是小数份时后端会把一笔拆成多条），
  * 故按事件记录的 portions 求和，而不是数事件条数 */
 const sumPortions = (list) => round1(list.reduce((s, e) => s + (Number(e.portions) || 1), 0));
-const unassignedMeals = computed(() => sumPortions(store.today.mealsLog.filter(e => !e.slot)));
-const assignedMeals = computed(() => sumPortions(store.today.mealsLog.filter(e => e.slot)));
+// T-139：只统计计划端核销事件——kind 事件没有 portions 字段，会被「|| 1」按 1 份虚增守恒行
+const unassignedMeals = computed(() => sumPortions(store.today.mealsLog.filter(e => !e.kind && !e.slot)));
+const assignedMeals = computed(() => sumPortions(store.today.mealsLog.filter(e => !e.kind && e.slot)));
 const doneTotal = computed(() => round1(assignedMeals.value + unassignedMeals.value));
 
 function addQuickFood(kind, id) {
@@ -600,7 +602,10 @@ async function checkIn() {
     if (acc.detail.length) {
       // 份数收整到 0.1 网格：连加多笔实扣会在第 3 笔起出现 3.5999999999999996 式残渣
       store.today.consumed = round1(acc.consumed);
-      store.today.mealsLog = acc.detail.map(d => eventOf(d, before));
+      // T-139：只替换计划端核销事件，实际端事件（kind:portion/outing）原样保留——
+      // 先记份数/外食再打卡，整体替换会把它们静默吞掉
+      store.today.mealsLog = store.today.mealsLog.filter(e => e.kind)
+        .concat(acc.detail.map(d => eventOf(d, before)));
       store.today.checkedIn = 1;
       celebratePotsEmpty(before);
     }
@@ -627,7 +632,8 @@ async function undoCheckIn() {
     const items = Object.keys(acc).map(k => acc[k]);
     if (items.length) store.inventory = (await api.restorePortions(items)).inventory;
     store.today.consumed = 0;
-    store.today.mealsLog = [];
+    // T-139：回撤只清计划端核销事件，实际端事件（kind:portion/outing）保留，与打卡同口径
+    store.today.mealsLog = store.today.mealsLog.filter(e => e.kind);
     store.today.checkedIn = 0;
     await persistToday();
     toast('已回撤，可重新调整份数与餐次');

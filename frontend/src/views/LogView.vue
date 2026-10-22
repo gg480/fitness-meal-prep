@@ -70,7 +70,8 @@ async function addWeight() {
  * utils.summarizeMealsLog 没有餐次维度，而本 Sprint 该文件被契约冻结，故在此按 slot 再聚合一次 */
 function groupPots(log) {
   const order = [], map = {};
-  (log.mealsLog || []).forEach(e => {
+  // T-139：只聚合计划端核销事件——portion/outing 事件没有 batchName，混进来会聚成「未命名锅×N」幻影
+  (log.mealsLog || []).filter(e => !e.kind).forEach(e => {
     const name = e.batchName || '未命名锅';
     const slot = e.slot || '';
     const key = name + '|' + slot;
