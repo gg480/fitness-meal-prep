@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { seedIfEmpty, ensurePresetFoods, backfillPresetNatures, backfillPresetGis, backfillPresetCookedWeights, backfillPresetCorrections, backfillPresetFromSeed, backfillRecipeNameFromSeed, backfillRecipeItemsFromSeed, backfillMealLogBatchNames, migrateCalcModeOnce } from './seed.js';
+import { seedIfEmpty, ensurePresetFoods, backfillPresetNatures, backfillPresetGis, backfillPresetCookedWeights, backfillPresetCorrections, backfillPresetFromSeed, backfillRecipeNameFromSeed, backfillRecipeItemsFromSeed, backfillMealLogBatchNames, migrateCalcModeOnce, ensureBuiltinTraining } from './seed.js';
 
 // 数据库文件统一放在 DATA_DIR（Docker 卷挂载点），首次运行目录可能不存在
 const dataDir = process.env.DATA_DIR || './data';
@@ -69,14 +69,28 @@ db.exec(`
     checked_in INTEGER NOT NULL DEFAULT 0, -- 打卡确认标记：0=未确认(草稿)，1=已确认
     day_type TEXT,                  -- T-126 当日登记的日类型 train|rest|none，NULL=未登记（回退 settings.dayType）
     outing TEXT,                    -- T-129 当日外食/喝酒记录 JSON {type,level,baijiu,beer,slot}，NULL=未登记
-    rhr INTEGER                     -- v3.2 晨脉（次/分，40–120）：NULL=当天没量。不加 DEFAULT 也不回填，
+    rhr INTEGER,                    -- v3.2 晨脉（次/分，40–120）：NULL=当天没量。不加 DEFAULT 也不回填，
                                     -- 「没量」与「量了某值」必须区分开，趋势线只画有值的点
+    fast_state TEXT                 -- 08 轻断食：当日断食状态 JSON {goal,lastMealTs,manual,endedTs}，NULL=未开始。
+                                    -- 「日粒度状态挂 day_logs」与 day_type/outing 同哲学；跨日断食按「结束日记录」处理
   );
 
   CREATE TABLE IF NOT EXISTS weights (
     date TEXT PRIMARY KEY,
-    kg REAL NOT NULL
+    kg REAL NOT NULL,
+    body_fat REAL                     -- 06 独立体重页：体脂率 %（0-60），可空；NULL = 该日未录体脂
   );
+
+  -- 06 独立体重页：围度记录表（六部位枚举，一天可多条并列存趋势，展示取最新）
+  -- part: waist 腰围 / hip 臀围 / upper_arm_l 大臂左 / upper_arm_r 大臂右 / thigh_l 大腿左 / thigh_r 大腿右
+  CREATE TABLE IF NOT EXISTS measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,               -- 'YYYY-MM-DD'（浏览器日历口径，POST 校验）
+    part TEXT NOT NULL,               -- 六部位枚举，路由层 400 校验
+    value REAL NOT NULL,              -- cm（20-200；腰围沿用规则引擎 40-200 口径在路由层校验）
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_measurements_part ON measurements (part, date);
 
   -- T-114 有氧记录：一天可有多条（早晚各一次），故用自增 id 而不是以日期为主键。
   -- date 由前端传浏览器本地日期（容器为 UTC，服务端自己的"今天"会差一天）；
@@ -139,6 +153,63 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT ''
   );
   CREATE INDEX IF NOT EXISTS idx_eatery_dishes_eatery ON eatery_dishes (eatery);
+
+  -- 07 训练系统升级 · 三张新表。EXERCISE_KEYS 19 枚举是前后端共同契约不变；
+  -- 这里新增的 exercises 表是动作库的持久层：builtin 19 行由 ensureBuiltinTraining 种子迁移补齐，
+  -- 用户自建动作 source='custom'，gif 无本地资产由前端 fallback 图标兜底。
+  CREATE TABLE IF NOT EXISTS exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,            -- 语义 id：builtin 19 枚举值 / 用户自建 'c_<随机>'；禁改禁删
+    name_zh TEXT NOT NULL,               -- 展示名（用户可改；builtin 行种子只在空/脏时补齐）
+    name_en TEXT,                        -- 可空；ExerciseDB 抓取时留英文原名
+    equipment TEXT NOT NULL DEFAULT 'other',  -- dumbbell|bench|bodyweight|other（问卷边界）
+    category TEXT NOT NULL DEFAULT 'other',   -- push|pull|legs|core|shoulders|arms|cardio|other
+    gif_url TEXT,                        -- 可空；本地 assets/actions/<key>.gif 或远程 URL
+    tips_json TEXT,                      -- 可空 JSON 数组；动作要点中文 3 条
+    source TEXT NOT NULL DEFAULT 'custom',    -- builtin|exercise_db|custom
+    enabled INTEGER NOT NULL DEFAULT 1,  -- 0 = 软删（生成器/排课不再选它，历史记录不动）
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+
+  -- 课表：'A'|'B'|'C' = 内置（种子迁移写入，key 不变）；用户自建 = 'P1'/'P2'… 按创建时序分配。
+  -- workout_logs.plan_key 的合法域由「本表 key 全集」决定（07 放宽校验的落点）
+  CREATE TABLE IF NOT EXISTS workout_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,            -- A|B|C|P1|P2…
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'user',   -- builtin|user
+    goal TEXT,                           -- gain|cut|maintain，可空（builtin 不填）
+    days_per_week INTEGER,               -- 可空
+    archived INTEGER NOT NULL DEFAULT 0, -- 1 = 归档（不再出现在选择列表，历史记录仍可回看）
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+
+  -- 课表内的训练日：seq 决定展示顺序；builtin A/B/C 各只有一条 day（seq=0，单日全身课）
+  CREATE TABLE IF NOT EXISTS plan_days (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL REFERENCES workout_plans(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,                -- 从 0 起
+    label TEXT NOT NULL                  -- 「全身 A」「练背日」等展示名
+  );
+
+  -- 训练日内的动作项：exercise_key 关联 exercises.key；exercise_key ∈ 19 枚举 + 用户自建 key 全集
+  CREATE TABLE IF NOT EXISTS plan_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    day_id INTEGER NOT NULL REFERENCES plan_days(id) ON DELETE CASCADE,
+    exercise_key TEXT NOT NULL,
+    sets INTEGER NOT NULL DEFAULT 3,
+    reps_target TEXT NOT NULL DEFAULT '10',  -- 目标次数：'10' 或区间 '8-10'（展示用，后端不解析）
+    ord INTEGER NOT NULL DEFAULT 0          -- 日内顺序
+  );
+
+  -- 周历排课：date 唯一（一天只挂一张课表）；day_id 可空（排了课表但没定日）/ rest=1 休息日。
+  -- 07 详设 §3：顺延是「读时派生」——落库值不因缺勤改动，今日卡展示时按 plan_schedule 从前往后找
+  CREATE TABLE IF NOT EXISTS plan_schedule (
+    date TEXT PRIMARY KEY,               -- YYYY-MM-DD
+    plan_key TEXT NOT NULL REFERENCES workout_plans(key),
+    day_id INTEGER,                      -- 可空：指向 plan_days.id
+    rest INTEGER NOT NULL DEFAULT 0      -- 1 = 休息日（不排动作）
+  );
 `);
 
 // 轻量迁移：老库 day_logs 缺 per_snap/batch_name/meals_log/satiety/checked_in 列时补建
@@ -169,6 +240,8 @@ function migrateDayLogsColumns() {
   // v3.2 晨脉：与 day_type / outing 同一手法 —— 整列补成 NULL 即天然是「当天没量」，
   // 无需猜测历史数据（任何回填都只能编造，且会污染后续的晨脉趋势线）
   if (!cols.includes('rhr')) db.exec('ALTER TABLE day_logs ADD COLUMN rhr INTEGER');
+  // 08 轻断食：与 rhr 同一手法 —— 整列补成 NULL 即「从未开始过断食」，老数据行为不变
+  if (!cols.includes('fast_state')) db.exec('ALTER TABLE day_logs ADD COLUMN fast_state TEXT');
 }
 migrateDayLogsColumns();
 
@@ -219,6 +292,14 @@ function migrateFoodsColumns() {
 }
 migrateFoodsColumns();
 
+// 06 独立体重页：weights 表补 body_fat 列（CREATE TABLE IF NOT EXISTS 不会改已有表）。
+// 可空无 DEFAULT —— NULL = 该日没量体脂，与「量了某个值」区分开（与 rhr 同一手法的正文语义）。
+function migrateWeightsColumns() {
+  const cols = db.prepare('PRAGMA table_info(weights)').all().map(c => c.name);
+  if (!cols.includes('body_fat')) db.exec('ALTER TABLE weights ADD COLUMN body_fat REAL');
+}
+migrateWeightsColumns();
+
 // T-114 的 cardio_logs 是全新表，没有历史 schema 需要改写：老库启动时由上面的
 // CREATE TABLE IF NOT EXISTS 直接补建，重复启动不重建，本身就是幂等迁移，故不需要 migrateXxxColumns。
 // 静息心率是唯一进入有氧消耗公式的个人参数，靠下面的 ensureSettingsKeys 补键（老库不覆盖用户值）。
@@ -250,6 +331,12 @@ function ensureSettingsKeys() {
     // T-126 上次重算配额时的体重（kg），null = 从未重算 → 规则引擎的提醒基准退回首条体重记录。
     // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
     lastRecalcWeight: null,
+    // 07 组间倒计时（秒）：跟练切组后的休息倒计时，30–300 整数。老库 INSERT OR IGNORE 补键。
+    // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
+    restSeconds: 90,
+    // 08 轻断食目标时长（小时）：今日页断食卡的进度分母，12–24。老库 INSERT OR IGNORE 补键。
+    // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
+    fastGoalHours: 16,
     // T-131 calcMode 一次性迁移标记：false = 尚未迁移。老库补这个键时是 false，
     // 随后由 migrateCalcModeOnce 决定是否把旧默认值 'tdee' 迁到 'quota' 并把标记置 true。
     // 与 seed DEFAULT_SETTINGS / 前端 SETTINGS_FALLBACK 同口径
@@ -296,3 +383,5 @@ backfillRecipeNameFromSeed(db);
 // 条件不满足（id≠1 / 名字被用户改过 / items 不是种子形态）时一个字都不动
 backfillRecipeItemsFromSeed(db);
 backfillMealLogBatchNames(db);
+// 07 训练系统升级：三张新表幂等种子 —— 补齐 19 内置动作与 A/B/C 课表（已存在则整组跳过，不覆盖用户改动）
+ensureBuiltinTraining(db);

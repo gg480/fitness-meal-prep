@@ -69,6 +69,20 @@ function onRestHrInput(e) {
   store.settings.restingHr = Number.isFinite(v) ? Math.min(120, Math.max(40, v)) : 70;
 }
 
+/* 组间倒计时秒数（07 训练升级，30–300 整数）：训练页跟练时每完成一组自动起倒数，
+ * 剩 10s 变色 + 震动。与后端 pickSpecial 白名单同口径：脏值退回默认 90 */
+function onRestSecondsInput(e) {
+  const v = parseInt(e.target.value, 10);
+  store.settings.restSeconds = Number.isFinite(v) ? Math.min(300, Math.max(30, v)) : 90;
+}
+
+/* 断食目标小时数（08 轻断食，12–24 整数）：今日页断食卡的目标线与剩余时长都按它算。
+ * 与后端 pickSpecial 白名单同口径：脏值退回默认 16 */
+function onFastGoalInput(e) {
+  const v = parseInt(e.target.value, 10);
+  store.settings.fastGoalHours = Number.isFinite(v) ? Math.min(24, Math.max(12, v)) : 16;
+}
+
 /* ===== 餐次开关（T-126）=====
  * 关掉的餐次当天不显示，其碳水比例与蛋白/脂肪份额按比例归一化给其余餐次。
  * 至少保留一个：全关等于「一天不吃饭」，后端也会 400 拒收，故在点击处就拦下并说明 */
@@ -240,6 +254,16 @@ function onImportFile(ev) {
             :value="store.settings.restingHr" @change="onRestHrInput">
         </div>
         <div class="field">
+          <label>组间休息 秒（30–300）</label>
+          <input class="mono" type="number" min="30" max="300" step="5"
+            :value="store.settings.restSeconds" @change="onRestSecondsInput">
+        </div>
+        <div class="field">
+          <label>断食目标 小时（12–24）</label>
+          <input class="mono" type="number" min="12" max="24" step="1"
+            :value="store.settings.fastGoalHours" @change="onFastGoalInput">
+        </div>
+        <div class="field">
           <label>每天吃几份（1–6）</label>
           <Stepper v-model="store.settings.mealsPerDay" :min="1" :max="6" :step="1" mono />
         </div>
@@ -257,6 +281,7 @@ function onImportFile(ev) {
 
       <p class="addon-note">腰围用于「向心性肥胖」提醒（空腹男 &gt;85cm / 女 &gt;80cm，BMI 正常时也不宜继续减脂），留空即不参与判定；
         静息心率是有氧消耗公式里唯一的个人参数（官方表覆盖 60–80），不知道就留默认值；
+        组间休息决定训练页跟练时每完成一组的自动倒数时长（剩 10 秒会变色提醒）；
         「每天吃几份」决定一天从锅里盛出几份，进而决定分餐比例（如 20/20/20/40）落到每餐的实际克数——一锅 6 份、每天 2 份即约 3 天吃完</p>
 
       <p class="addon-note is-advise">日类型只是「默认值」：当天在今日页登记了状态（如做了力量训练）就按登记值算，

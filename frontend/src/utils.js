@@ -1267,3 +1267,59 @@ export function intakeBreakdown(log) {
   }
   return { portion, snack, outing, total, dishes };
 }
+
+/* 按“权重”把 total 拆成 n 份（配方页/做饭页共用）：前 N-1 项四舍五入，末项吃余数。
+ * 必须四舍五入而不是向下取整——实测 6 → 6.1 → 6 的场景里向下取整会让末项越摊越大（1.1/1.1/1.1/2.7）。
+ * weights 全为 0 时返回全 0 数组（调用方保证 total 有意义） */
+export function spreadByWeights(total, weights) {
+  const sum = weights.reduce((s, w) => s + (w > 0 ? w : 0), 0);
+  const out = weights.map(() => 0);
+  if (!(sum > 0)) return out;
+  for (let i = 0; i < weights.length - 1; i++) {
+    out[i] = weights[i] > 0 ? round1(total * weights[i] / sum) : 0;
+  }
+  out[weights.length - 1] = round1(Math.max(0, total - out.reduce((s, v) => s + v, 0)));
+  return out;
+}
+
+/* 拆分结果落成分包表：只写 >0 的槽位（0 表示该餐不参与，不产生 0 份的脏键） */
+export function toAlloc(rows, vals) {
+  const next = {};
+  rows.forEach((r, i) => { if (vals[i] > 0) next[r.slot] = vals[i]; });
+  return next;
+}
+
+/* ===== 05 菜谱交互重构：配方页快速加食材的两个纯函数（可在 Node 断言脚本直接 import） ===== */
+
+/* 常用食材 Top20：按历史配方出现「锅数」统计频次（配方库就是历史，天然反映常吃什么）。
+ * 并列时按食材名 zh 序稳定排列，保证同一份数据两次计算结果一致（断言可锁）。
+ * 只统计 foods 表里仍存在的食材——删掉的自定义食材不再浮上来 */
+export function topFoodIds(recipes, foods) {
+  const known = new Set(foods.map(f => f.id));
+  const freq = {};
+  (recipes || []).forEach(r => {
+    Object.keys(r.items || {}).forEach(id => {
+      if (known.has(id)) freq[id] = (freq[id] || 0) + 1;
+    });
+  });
+  const nameOf = id => {
+    const f = foods.find(x => x.id === id);
+    return f ? f.name : id;
+  };
+  return Object.keys(freq)
+    .sort((a, b) => (freq[b] - freq[a]) || nameOf(a).localeCompare(nameOf(b), 'zh'))
+    .slice(0, 20);
+}
+
+/* 加食材 = 1 步（Q4 裁决）：点击即入锅并 +1 份，无弹窗无确认。
+ * 口径与 toggleFood 的既有约定一致：items 存「整锅克数」，
+ * 「1 份食材」= 每份默认克数 × 配方份数（6 份配方点一次红薯 = 每份都多一份红薯的量）。
+ * items 不存在 → 以 grams 为初始整锅克数（调用方传「每份默认 × 份数」）；
+ * 已存在 → 在现有整锅克数上再加同一口径的 grams（调用方同样传「每份默认 × 份数」）。
+ * 返回新对象而非原地改（Vue 响应式整体替换，避免深层监听坑） */
+export function addServing(items, id, grams) {
+  const cur = items[id];
+  const next = Object.assign({}, items);
+  next[id] = (cur != null ? cur : 0) + grams;
+  return next;
+}

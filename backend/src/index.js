@@ -11,9 +11,15 @@ import dayLogsRouter from './routes/day-logs.js';
 // T-133 外食菜品库：外食弹层按店取菜 / 新菜当场新增 / 删除误录
 import eateryDishesRouter from './routes/eatery-dishes.js';
 import weightsRouter from './routes/weights.js';
+// 06 独立体重页：围度六部位记录（waist/hip/大臂左右/大腿左右）
+import measurementsRouter from './routes/measurements.js';
 import cardioRouter from './routes/cardio.js';
 import ruleStateRouter from './routes/rule-state.js';
 import trainingRouter from './routes/training.js';
+// 07 训练系统升级：动作库 / 课表库 / 周历排课
+import exercisesRouter from './routes/exercises.js';
+import plansRouter from './routes/plans.js';
+import scheduleRouter from './routes/schedule.js';
 import backupRouter from './routes/backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,9 +36,13 @@ app.use('/api/day-logs', dayLogsRouter);
 // T-133 外食菜品库路由（本日实际摄入模块 · 设计文档 §3.1）
 app.use('/api/eatery-dishes', eateryDishesRouter);
 app.use('/api/weights', weightsRouter);
+app.use('/api/measurements', measurementsRouter);
 app.use('/api/cardio', cardioRouter);
 app.use('/api/rule-state', ruleStateRouter);
 app.use('/api/training', trainingRouter);
+app.use('/api/exercises', exercisesRouter);
+app.use('/api/plans', plansRouter);
+app.use('/api/schedule', scheduleRouter);
 app.use('/api/backup', backupRouter);
 
 // /api 前缀下未命中的路径统一 404，保持错误格式一致

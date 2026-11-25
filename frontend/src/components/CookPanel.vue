@@ -1,36 +1,42 @@
 <script setup>
-/* 做饭页（F4）：厨房称重 → 分装 → 批次登记入库 */
-import { computed, ref } from 'vue';
+/* 做饭子视图（05 菜谱交互重构：做饭并入配方页）——分装 → 批次登记入库。
+ * 原 CookView 的称重段已按 Q6 裁决整体移除（免称重，保留生熟口径提示）：
+ * 进子视图直接按配方的分包语义进分装（原 toPack 流程）。
+ * 本组件由 RecipeView 以 v-if 挂载，关闭走 emit('close')；
+ * pack / done 两态用组件内 phase 表达（store.cookPhase 已随称重一并废弃），
+ * 关闭即卸载、状态随之重置，再进时 watch(open) 重新按当前配方进入分装 */
+import { computed, ref, watch } from 'vue';
 import { store, foodById, recipeTotals, profileWithCardio, SLOT_LABEL, mealStage, mealsPerDay, todayDayType } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
 import { CAT_ORDER, PACK_SLOTS, STAPLE_COOKED_TIP, COOKED_TIP_KEYS, COOKED_WEIGHT_LABEL } from '../constants';
-import { naturalOf, qtyText, perOf, calcTotals, round1, batchName, mealTargets } from '../utils';
-import Stepper from '../components/Stepper.vue';
-import NutrientTiles from '../components/NutrientTiles.vue';
+import { naturalOf, qtyText, perOf, calcTotals, round1, batchName, mealTargets, spreadByWeights, toAlloc } from '../utils';
+import Stepper from './Stepper.vue';
+import NutrientTiles from './NutrientTiles.vue';
 
+const props = defineProps({ open: { type: Boolean, default: true } });
+const emit = defineEmits(['close']);
+
+const phase = ref('pack'); // pack / done（组件内状态，随挂载重置）
 const registering = ref(false);
 
-/* 可称重清单：按下锅直觉顺序 */
-const weighIds = computed(() =>
+/* 本锅食材清单：按下锅直觉顺序（主食 → 蛋白 → 蔬菜 → 油脂），与原厨房页同一排序 */
+const itemIds = computed(() =>
   Object.keys(store.recipe.items)
     .filter(id => foodById(id))
     .sort((a, b) =>
       (CAT_ORDER[foodById(a).cat] - CAT_ORDER[foodById(b).cat]) ||
       foodById(a).name.localeCompare(foodById(b).name, 'zh'))
 );
-const doneCount = computed(() => weighIds.value.filter(id => store.weigh[id]).length);
-const allWeighed = computed(() => weighIds.value.length > 0 && doneCount.value === weighIds.value.length);
 
 const batchMeta = computed(() =>
-  '一锅生料 ' + Math.round(recipeTotals.value.weight) + 'g · ' + weighIds.value.length + ' 种食材');
+  '一锅生料 ' + Math.round(recipeTotals.value.weight) + 'g · ' + itemIds.value.length + ' 种食材');
 
 /* 生熟口径提示（T-120）：只在本锅含「干重 / 熟重」主食时给，因为只有这两类存在生↔熟的记账歧义
- * （米面生熟碳水差 2–3 倍）；生重主食（红薯 / 玉米 / 山药 / 南瓜）无需区分生熟，提示只会变噪音。
- * 称重与分装各出现一次（两次操作各自独立用克数），同一屏内不重复 */
+ * （米面生熟碳水差 2–3 倍）；生重主食（红薯 / 玉米 / 山药 / 南瓜）无需区分生熟，提示只会变噪音 */
 const cookedStaples = computed(() => {
   const out = [];
-  weighIds.value.forEach(id => {
+  itemIds.value.forEach(id => {
     const f = foodById(id);
     if (!f || f.nature !== 'staple') return;
     if (COOKED_TIP_KEYS.indexOf(f.cookedWeight) < 0) return;
@@ -60,10 +66,11 @@ const potPer = computed(() => perOf(calcTotals(store.recipe.items, store.foods),
 
 /* ===== 分装的餐次归属（契约 §4.4：批次记住各餐剩余份数，Σ 恒等于 portions） =====
  * 与配方页同一套口径：份数决定该餐克重，所以「哪几份归哪一餐」就是各餐碳水占比本身。
- * 这里再实现一遍而没抽公共函数，是因为本 Sprint utils.js / constants.js 已被契约冻结 */
+ * 05 起切分函数已抽到 utils（spreadByWeights / toAlloc），配方页与本页共用同一实现，
+ * 「Σ = 份数」不变量只剩一处代码；契约冻结的只是行为与表结构，等价重构不违反 */
 const mealPlan = computed(() => {
   // 与今日页 / 配方页同口径：取含有氧置换的目标，三页各餐克数一致（备餐时拿到的应是实际可吃量）。
-  // T-127：日类型用「当日生效值」并透传 mealSlotsOff —— 否则做饭页会按设置里的默认日类型分份，
+  // T-127：日类型用「当日生效值」并透传 mealSlotsOff —— 否则分装会按设置里的默认日类型分份，
   // 还会给已关闭的餐次分到份数（与今日页 / 配方页对不上账）
   const pf = profileWithCardio.value;
   return mealTargets(todayDayType.value, store.settings.trainSlot, { c: pf.c, p: pf.p, f: pf.f },
@@ -91,25 +98,6 @@ const allocRows = computed(() => {
     };
   });
 });
-
-/* 按权重切份：前 N−1 项按比例取最接近的 0.1，末项吃余数（与 mealTargets 的收尾口径同构）。
- * 用四舍五入而非向下取整：向下取整会把误差全推给末项，份数来回微调后占比会明显漂移 */
-function spreadByWeights(total, weights) {
-  const sum = weights.reduce((s, w) => s + (w > 0 ? w : 0), 0);
-  const out = weights.map(() => 0);
-  if (!(sum > 0)) return out;
-  for (let i = 0; i < weights.length - 1; i++) {
-    out[i] = weights[i] > 0 ? round1(total * weights[i] / sum) : 0;
-  }
-  out[weights.length - 1] = round1(Math.max(0, total - out.reduce((s, v) => s + v, 0)));
-  return out;
-}
-
-function toAlloc(rows, vals) {
-  const next = {};
-  rows.forEach((r, i) => { if (vals[i] > 0) next[r.slot] = vals[i]; });
-  return next;
-}
 
 /* 分装份数一变就等比重摊：Σ 与份数脱钩的话，登记入库必被后端 Σ 校验拒收 */
 function rescalePackAlloc(total) {
@@ -145,18 +133,14 @@ function clearAlloc() {
   toast('已取消分餐次：整锅均分');
 }
 
-function toggleWeigh(id) {
-  if (store.weigh[id]) delete store.weigh[id]; // 再点撤销误触
-  else store.weigh[id] = true;
-}
-
-function toPack() {
+/* 进子视图即按配方的分包进分装（原 toPack 语义：带着配方的分包，脱钩则重摊拉回 Σ = 份数） */
+function enterPack() {
+  phase.value = 'pack';
   store.packPortions = store.recipe.portions;
-  // 带着配方的分包进分装；若那份与份数已脱钩（内存里改过还没存），重摊一次把它拉回 Σ = 份数
   store.packAllocation = Object.assign({}, store.recipe.mealAllocation || {});
   rescalePackAlloc(store.packPortions);
-  store.cookPhase = 'pack';
 }
+watch(() => props.open, v => { if (v) enterPack(); }, { immediate: true });
 
 /* 批次登记：POST inventory（含每份 kcal/P/C/F + 整锅食材克重快照），成功跳 done */
 async function registerBatch() {
@@ -180,7 +164,7 @@ async function registerBatch() {
     });
     store.inventory = res.inventory;
     store.lastBatchId = res.batch.id;
-    store.cookPhase = 'done';
+    phase.value = 'done';
     toast('已登记 ' + store.packPortions + ' 份入库存' + (packSum.value > 0 ? '（已标餐次）' : ''));
   } catch (err) {
     toast('登记失败：' + err.message);
@@ -189,74 +173,33 @@ async function registerBatch() {
   }
 }
 
+/* 再开一锅：保留配方回到分装（称重态已废弃，直接按配方分包重进） */
 function again() {
-  store.weigh = {};
   store.packPortions = store.recipe.portions;
   store.packAllocation = Object.assign({}, store.recipe.mealAllocation || {});
-  store.cookPhase = 'weigh';
+  rescalePackAlloc(store.packPortions);
+  phase.value = 'pack';
 }
 
 /* 清空重选：工作区脱离配方库（id 置空）重新开始，不落库。
- * 旧实现把空配方存回服务端，等于静默抹掉原配方内容（v2.3 数据丢失事故同源，一并修复） */
+ * 旧实现把空配方存回服务端，等于静默抹掉原配方内容（v2.3 数据丢失事故同源，语义保留） */
 function fresh() {
   store.recipe = { id: null, name: '', portions: 6, items: {}, locked: [], mealAllocation: {} };
-  store.weigh = {};
   store.packAllocation = {};
-  store.cookPhase = 'weigh';
-  store.page = 'recipe';
+  emit('close');
   toast('已清空重新开始（原配方未改动）');
 }
 
-const goRecipe = () => { store.page = 'recipe'; window.scrollTo(0, 0); };
+const close = () => emit('close');
 </script>
 
 <template>
   <section class="narrow">
-    <!-- 称重 -->
-    <div v-if="store.cookPhase === 'weigh'">
-      <div class="panel-head">
-        <button class="btn ghost sm" type="button" @click="goRecipe">改配方</button>
-        <span class="chip mono">已称 {{ doneCount }}/{{ weighIds.length }}</span>
-      </div>
-      <div class="sec-head">
-        <svg class="ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
-        <b>厨房称重</b>
-      </div>
-      <p class="t-note">按厨房秤读数逐项称量，称完一项点掉一项；口径以徽标为准（干重 / 生重 / 克重）</p>
-      <!-- 生熟口径提示（T-120）：只在本锅有干重 / 熟重主食时出现，只提示不换算 -->
-      <p v-if="cookedStaples.length" class="addon-note is-advise">
-        {{ STAPLE_COOKED_TIP }}<span class="advise-sub">本锅涉及：{{ cookedStaples.join(' / ') }}</span>
-      </p>
-      <div class="weigh-list">
-        <button v-for="id in weighIds" :key="id" class="k-row" :class="{ done: !!store.weigh[id] }"
-          type="button" @click="toggleWeigh(id)">
-          <span class="k-main">
-            <b class="k-name">{{ foodById(id).name }}</b>
-            <span class="k-badges">
-              <span v-if="(store.recipe.locked || []).includes(id)" class="badge big lock" title="已锁定，克数自动搭配时保持不变">🔒</span>
-              <span class="badge big">{{ foodById(id).unit }}</span>
-              <span v-if="naturalOf(id)" class="badge big qty">≈ {{ qtyText(store.recipe.items[id], naturalOf(id)) }}</span>
-            </span>
-          </span>
-          <span class="k-grams">{{ store.recipe.items[id] }}<i>g</i></span>
-          <span class="k-check">
-            <svg v-if="store.weigh[id]" class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>
-          </span>
-        </button>
-      </div>
-      <div class="dock">
-        <div class="progress"><i :style="{ width: (weighIds.length ? doneCount / weighIds.length * 100 : 0) + '%' }"></i></div>
-        <div class="dock-row">
-          <button class="btn ghost" type="button" @click="store.weigh = {}; toast('称重进度已重置')">重置</button>
-          <button class="btn primary" type="button" :disabled="!allWeighed" @click="toPack">全部称完，去分装</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 分装 -->
-    <div v-else-if="store.cookPhase === 'pack'">
+    <div v-if="phase === 'pack'">
       <div class="panel-head">
-        <button class="btn ghost sm" type="button" @click="store.cookPhase = 'weigh'">回称重</button>
+        <button class="btn ghost sm" type="button" @click="close">改配方</button>
+        <span class="chip mono">{{ itemIds.length }} 种食材</span>
       </div>
       <div class="card">
         <div class="batch-top">
@@ -270,7 +213,7 @@ const goRecipe = () => { store.page = 'recipe'; window.scrollTo(0, 0); };
         <NutrientTiles :kcal="round1(packPer.kcal)" :p="round1(packPer.p)"
           :c="round1(packPer.c)" :f="round1(packPer.f)" />
         <p class="raw-ref mono">每份生料参考 ≈ {{ Math.round(packPer.weight) }} g（按实际分装 {{ store.packPortions }} 份计，含油脂调料）</p>
-        <!-- 分装是第二次「用克数」的操作，口径提示在这里再出一次（同一屏内仍只一条） -->
+        <!-- 分装是「用克数」的操作，生熟口径提示在这里出现（同一屏内只一条） -->
         <p v-if="cookedStaples.length" class="addon-note is-advise">
           {{ STAPLE_COOKED_TIP }}<span class="advise-sub">本锅涉及：{{ cookedStaples.join(' / ') }}</span>
         </p>
@@ -326,7 +269,7 @@ const goRecipe = () => { store.page = 'recipe'; window.scrollTo(0, 0); };
         <p class="raw-ref mono">每份生料参考 ≈ {{ round1(potPer.weight) }} g（本锅分装 {{ store.packPortions }} 份）</p>
         <h4 class="card-sub">食材清单</h4>
         <ul class="pd-list">
-          <li v-for="id in weighIds" :key="id">
+          <li v-for="id in itemIds" :key="id">
             <span class="pd-main">
               <span class="pd-name">{{ foodById(id).name }}</span>
               <span class="pd-badges">

@@ -1,15 +1,20 @@
 <script setup>
-/* 配方页（F2 食材库 + F3 组装器）：筛选/自定义、自动搭配、汇总、每日预演、配方库 */
+/* 配方页（F2 食材库 + F3 组装器）——05 重构为三段式：
+ * 段A 今日目标只读总览（点卡到「目标」页调整，本页不改目标）
+ * 段B 食材清单：常用 Top20 一键 +1 份、搜索、品类弹层；点击即入无弹窗无确认
+ * 段C 生成与保存：生成中反馈 + 300ms 渐显 + 保存 toast；做饭并入本页子视图（CookPanel）
+ * （做饭不再跳独立 cook 页，称重段已按 Q6 裁决整体移除，进子视图直接分装） */
 import { ref, computed, watch } from 'vue';
 import { store, profileWithCardio, recipeTotals, recipePer, previewState, recipeLib, foodById, SLOT_LABEL, mealStage, mealsPerDay, todayDayType } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
 import {
-  CAT_ORDER, CATS, CAT_DEFAULT_G, ADDONS, PACK_SLOTS
+  CAT_ORDER, CATS, CAT_DEFAULT_G, ADDONS, PACK_SLOTS, TRAIN_SLOTS
 } from '../constants';
 import {
   calcTotals, perOf, dailyPreview, autoGenerate, genAdvice,
-  autoRecipeName, adjustFoodByStep, mealTargets, potDaysOf, fmtQty, round1, deviOf, pctText
+  autoRecipeName, adjustFoodByStep, mealTargets, potDaysOf, fmtQty, round1, deviOf, pctText,
+  spreadByWeights, toAlloc, topFoodIds, addServing
 } from '../utils';
 import Stepper from '../components/Stepper.vue';
 import FoodRow from '../components/FoodRow.vue';
@@ -19,11 +24,34 @@ import RecipeLibBar from '../components/RecipeLibBar.vue';
 import NutrientTiles from '../components/NutrientTiles.vue';
 import StatBars from '../components/StatBars.vue';
 import GapRow from '../components/GapRow.vue';
+import CookPanel from '../components/CookPanel.vue';
 
 const recipeName = ref('');
 const forceChk = ref(false);
 const pickerOpen = ref(false);      // 食材库弹层开关（左栏只留配方结构，食材库按需调出）
 const pickerCat = ref('grain');     // 打开弹层时记住被点的类别，兼作弹层标题
+const cookView = ref(false);        // 做饭子视图开关（并入配方页，不再跳独立 cook 页）
+const genBusy = ref(false);         // 自动搭配进行中：防双击 + 「生成中…」反馈
+const genTick = ref(0);             // 生成成功自增，结果区以 :key 重放 300ms 渐显
+const saving = ref(false);          // 保存 / 另存 / 去做饭共用 in-flight 锁（异步按钮防双击）
+
+function vibrate(ms) {
+  if (navigator.vibrate) navigator.vibrate(ms);
+}
+
+/* 段A：今日目标只读总览（数据全部现算，与目标页 / 今日页同一口径） */
+const goalStrip = computed(() => {
+  const pf = profileWithCardio.value;
+  const t = todayDayType.value;
+  const slot = (TRAIN_SLOTS.find(s => s.id === store.settings.trainSlot) || {}).label;
+  const day = t === 'train' ? ('训练日 · ' + (slot || '力量训练')) : (t === 'rest' ? '只做有氧' : '休息日');
+  return { day, c: pf.c, p: pf.p, f: pf.f, kcal: pf.kcal };
+});
+
+function goGoal() {
+  store.page = 'goal';
+  window.scrollTo(0, 0);
+}
 
 /* 下锅直觉顺序：主食 → 蛋白 → 蔬菜 → 油脂 → 自定义 */
 const visibleFoods = computed(() => {
@@ -34,6 +62,19 @@ const visibleFoods = computed(() => {
     .sort((a, b) => (CAT_ORDER[a.cat] - CAT_ORDER[b.cat]) || a.name.localeCompare(b.name, 'zh'));
 });
 
+/* 常用 Top20：配方库历史频次（纯前端统计，topFoodIds 并列按名称稳定序）。
+ * 点 chip = +1 份整锅克数（1 份食材 = CAT_DEFAULT_G[f.cat] × portions），已选也会继续累加 */
+const quickFoods = computed(() => topFoodIds(store.recipes, store.foods)
+  .map(id => foodById(id)).filter(Boolean));
+
+/* 加食材 = 1 步：不存在 → 新行 1 份；已存在 → 再 +1 份。无弹窗无确认（Q4 裁决）。
+ * 弹层行与常用 chip 共用这套语义；移除一律走已选行的删除钮 */
+function addServings(id) {
+  const f = foodById(id);
+  if (!f) return;
+  store.recipe.items = addServing(store.recipe.items, id, CAT_DEFAULT_G[f.cat] * store.recipe.portions);
+}
+
 /* 红色阻止：worst 变红时一次性提示（按钮同时禁用） */
 watch(() => previewState.value.worst, (v, old) => {
   if (v === 'bad' && old !== 'bad') {
@@ -41,19 +82,9 @@ watch(() => previewState.value.worst, (v, old) => {
   }
 });
 
-function toggleFood(id) {
-  const f = foodById(id);
-  if (!f) return;
-  if (store.recipe.items[id] != null) delete store.recipe.items[id];
-  // CAT_DEFAULT_G 是「每份」默认克数，而 items 存的是整锅克数，必须乘份数：
-  // 不乘会让多份配方里新加入的食材只有一份的量（6 份配方点红薯只给 100g，每份 16.7g 无法使用）
-  else store.recipe.items[id] = CAT_DEFAULT_G[f.cat] * store.recipe.portions;
-}
-
-/* 取消所有选择：清空配方食材，同时作废称重进度（防残留称重记录） */
+/* 取消所有选择：清空配方食材（05 起无称重进度，无需作废） */
 function clearAll() {
   store.recipe.items = {};
-  store.weigh = {};
   toast('已取消所有食材选择');
 }
 
@@ -77,10 +108,9 @@ function stepFood(id, dir) {
   if (!locked.includes(id)) locked.push(id);
 }
 
-/* 已选行移除：同步清理称重记录，避免厨房页留下无主称重项 */
+/* 已选行移除 */
 function removeFood(id) {
   delete store.recipe.items[id];
-  pruneWeigh();
 }
 
 /* 左栏分组：按类别聚合已选食材，顺序沿用 CATS（下锅直觉顺序）；
@@ -153,30 +183,40 @@ async function removeCustomFood(id) {
 
 /* 自动搭配：勾选集合 → 按每份目标分配克数；锁定食材克数保持并入 base；
    手动勾选但未分配的（如酱油）保留原值 */
-function autoGen() {
-  const lockedArr = (store.recipe.locked || [])
-    .filter(id => store.recipe.items[id] != null)
-    .map(id => ({ id, g: store.recipe.items[id] }));
-  // 生成目标与门禁 / 每日预演同一口径（含当日有氧置换），否则刚生成就被判成"低于目标"
-  const res = autoGenerate(Object.keys(store.recipe.items), store.days, profileWithCardio.value, store.foods,
-    lockedArr, mealsPerDay.value);
-  if (res.error) {
-    toast('自动搭配需要至少勾选 1 种主食和 1 种蛋白');
-    return;
+async function autoGen() {
+  if (genBusy.value) return;
+  genBusy.value = true;
+  try {
+    // 先让「生成中…」渲染一帧再跑同步分配（大配方时按钮不至卡住无反馈）
+    await new Promise(r => setTimeout(r, 30));
+    const lockedArr = (store.recipe.locked || [])
+      .filter(id => store.recipe.items[id] != null)
+      .map(id => ({ id, g: store.recipe.items[id] }));
+    // 生成目标与门禁 / 每日预演同一口径（含当日有氧置换），否则刚生成就被判成"低于目标"
+    const res = autoGenerate(Object.keys(store.recipe.items), store.days, profileWithCardio.value, store.foods,
+      lockedArr, mealsPerDay.value);
+    if (res.error) {
+      toast('自动搭配需要至少勾选 1 种主食和 1 种蛋白');
+      return;
+    }
+    const items = Object.assign({}, res.items);
+    Object.keys(store.recipe.items).forEach(id => {
+      if (items[id] == null) items[id] = store.recipe.items[id];
+    });
+    store.recipe.items = items;
+    store.recipe.portions = res.portions;
+    store.packPortions = res.portions;
+    rescaleAlloc(res.portions); // 份数变了（days × M），分包同步等比重摊，否则保存必被 Σ 校验拦下
+    if (res.lockedProteinOver) toast('锁定蛋白已近/超目标');
+    // 预演口径与配方页红黄绿同一来源：分包只改各餐分配，日总量恒为「每份 × M 份正餐 + 加项」
+    const daily = dailyPreview(perOf(calcTotals(items, store.foods), res.portions), true,
+      store.recipe.mealAllocation, mealsPerDay.value);
+    genTick.value++;  // 结果区重放 300ms 渐显（.gen-anim）
+    vibrate(20);      // 生成成功触觉反馈（不支持振动的环境静默跳过）
+    toast(genAdvice(daily, profileWithCardio.value) || '已按每份目标生成，微调克数后即可去做饭');
+  } finally {
+    genBusy.value = false;
   }
-  const items = Object.assign({}, res.items);
-  Object.keys(store.recipe.items).forEach(id => {
-    if (items[id] == null) items[id] = store.recipe.items[id];
-  });
-  store.recipe.items = items;
-  store.recipe.portions = res.portions;
-  store.packPortions = res.portions;
-  rescaleAlloc(res.portions); // 份数变了（days × M），分包同步等比重摊，否则保存必被 Σ 校验拦下
-  if (res.lockedProteinOver) toast('锁定蛋白已近/超目标');
-  // 预演口径与配方页红黄绿同一来源：分包只改各餐分配，日总量恒为「每份 × M 份正餐 + 加项」
-  const daily = dailyPreview(perOf(calcTotals(items, store.foods), res.portions), true,
-    store.recipe.mealAllocation, mealsPerDay.value);
-  toast(genAdvice(daily, profileWithCardio.value) || '已按每份目标生成，微调克数后进入称重');
 }
 
 /* 锁定切换：存在即移除 / 不存在即加入，供自动搭配保持该食材克数 */
@@ -243,8 +283,10 @@ function cleanLocked() {
 
 /* 存配方：已绑定库条目 → 更新那条；未绑定（新工作区/刚清空）→ 新建一条 */
 async function saveRecipeToLib() {
+  if (saving.value) return; // in-flight 防双击
   if (!Object.keys(store.recipe.items).length) { toast('请先勾选食材'); return; }
   if (allocError.value) { toast(allocError.value); return; }
+  saving.value = true;
   const name = recipeName.value.trim() || autoRecipeName(store.recipe.items, store.foods);
   const isUpdate = !!store.recipe.id;
   try {
@@ -253,17 +295,22 @@ async function saveRecipeToLib() {
     store.recipe.id = saved.id;
     recipeName.value = name;
     await refreshRecipes();
+    vibrate(20); // 保存成功触觉反馈
     toast('配方「' + name + '」已' + (isUpdate ? '更新' : '保存') +
       (previewState.value.worst === 'bad' ? '（带红色徽标）' : ''));
   } catch (err) {
     toast('保存失败：' + err.message);
+  } finally {
+    saving.value = false;
   }
 }
 
 /* 另存为：强制新建一条，原配方保持不动（id 置空走 POST） */
 async function saveAsNew() {
+  if (saving.value) return;
   if (!Object.keys(store.recipe.items).length) { toast('请先勾选食材'); return; }
   if (allocError.value) { toast(allocError.value); return; }
+  saving.value = true;
   const name = recipeName.value.trim() || autoRecipeName(store.recipe.items, store.foods);
   try {
     const saved = await api.createRecipe(Object.assign({}, store.recipe, { name, id: null, locked: cleanLocked() }));
@@ -271,9 +318,12 @@ async function saveAsNew() {
     store.recipe.name = name;
     recipeName.value = name;
     await refreshRecipes();
+    vibrate(20);
     toast('已另存为新配方「' + name + '」，原配方未改动');
   } catch (err) {
     toast('另存失败：' + err.message);
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -286,15 +336,14 @@ async function loadRecipe(id) {
   };
   store.packPortions = r.portions;
   store.packAllocation = Object.assign({}, store.recipe.mealAllocation);
-  store.weigh = {}; // 配方变了，称重进度作废
   recipeName.value = r.name;
   try { await api.saveSettings({ current_recipe_id: r.id }); } catch (err) { /* 指针保存失败不阻断载入 */ }
   toast(r.flagBad ? '已载入「' + r.name + '」⚠ 红色偏差配方' : '已载入「' + r.name + '」');
 }
 
-async function deleteRecipeFromLib() {
-  if (!store.recipe.id) return;
-  const id = store.recipe.id;
+/* 删除库条目（15 弹层化：id 由配方库弹层传入，删除确认在弹层内完成） */
+async function deleteRecipeFromLib(id) {
+  if (!id) return;
   try {
     await api.deleteRecipe(id);
     await refreshRecipes();
@@ -306,6 +355,24 @@ async function deleteRecipeFromLib() {
     toast('配方已删除');
   } catch (err) {
     toast(err.message);
+  }
+}
+
+/* 重命名库条目（15 新增）：只改那条自身，不动工作区；
+ * 改的是当前绑定条时，同步工作区名与输入框 */
+async function renameRecipe(id, name) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) { toast('名字不能为空'); return; }
+  try {
+    await api.renameRecipe(id, trimmed);
+    await refreshRecipes();
+    if (store.recipe.id === id) {
+      store.recipe.name = trimmed;
+      recipeName.value = trimmed;
+    }
+    toast('已重命名为「' + trimmed + '」');
+  } catch (err) {
+    toast('重命名失败：' + err.message);
   }
 }
 
@@ -367,27 +434,8 @@ const allocRows = computed(() => {
 /* 有当日目标比例、可以自动分配的餐次 */
 const fillableRows = computed(() => allocRows.value.filter(r => r.carbRatio != null));
 
-/* 按权重把总份数切成 0.1 精度的几份：前 N−1 项按比例取最接近的 0.1，末项吃余数 ——
- * 与 mealTargets 的「末项吃余数」同构，拼出的分包天然满足后端 Σ = portions 不变量。
- * 前项必须四舍五入而非向下取整：向下取整会把误差全推给末项，份数来回微调几次后
- * 练后餐的 40% 会漂到 45%（实测 6 → 6.1 → 6 会得到 1.1/1.1/1.1/2.7） */
-function spreadByWeights(total, weights) {
-  const sum = weights.reduce((s, w) => s + (w > 0 ? w : 0), 0);
-  const out = weights.map(() => 0);
-  if (!(sum > 0)) return out;
-  for (let i = 0; i < weights.length - 1; i++) {
-    out[i] = weights[i] > 0 ? round1(total * weights[i] / sum) : 0;
-  }
-  out[weights.length - 1] = round1(Math.max(0, total - out.reduce((s, v) => s + v, 0)));
-  return out;
-}
-
-/* 值数组 → 分包对象：0 份的餐次不写键，对象保持紧凑 */
-function toAlloc(rows, vals) {
-  const next = {};
-  rows.forEach((r, i) => { if (vals[i] > 0) next[r.slot] = vals[i]; });
-  return next;
-}
+/* 切分函数已抽到 utils（05 等价重构）：spreadByWeights 前项四舍五入防漂移
+ * （实测 6 → 6.1 → 6 会得到 1.1/1.1/1.1/2.7），拼出的分包天然满足 Σ = portions 不变量 */
 
 /* 份数变了就按现有权重等比重摊，否则 Σ 与份数脱钩，保存时只能拦人 */
 function rescaleAlloc(total) {
@@ -432,51 +480,71 @@ function setPortions(v) {
   rescaleAlloc(v);
 }
 
-/* 配方可能改动过：只保留仍在配方里的称重记录 */
-function pruneWeigh() {
-  Object.keys(store.weigh).forEach(id => {
-    if (store.recipe.items[id] == null) delete store.weigh[id];
-  });
-}
-
-/* 进入厨房：红色阻止 + 持久化当前配方 */
-async function goCook() {
+/* 去做饭（05 起为页内子视图，不再有称重步骤）：红色阻止 + 持久化当前配方 + 打开 CookPanel */
+async function openCook() {
+  if (saving.value) return;
   if (!Object.keys(store.recipe.items).length) { toast('请先勾选食材'); return; }
-  // 这里的保存是 try/catch 静默的（保存失败也要能进厨房），所以分包必须先在前端拦住，
-  // 否则用户会带着一份"没存进去的分包"去做饭
+  // 这里的保存是 try/catch 静默的（保存失败也要能去做饭），所以分包必须先在前端拦住，
+  // 否则用户会带着一份"没存进去的分包"去分装
   if (allocError.value) { toast(allocError.value); return; }
   if (previewState.value.worst === 'bad' && !forceChk.value) {
     toast('偏差 > 20% 为红色阻止，需先勾选「我知道偏差」');
     return;
   }
-  pruneWeigh();
-  if (!store.recipe.name) store.recipe.name = autoRecipeName(store.recipe.items, store.foods);
-  recipeName.value = store.recipe.name;
+  saving.value = true;
   try {
-    // 必须回写返回的 id：工作区未绑定时这里新建了条目，不回写会在下次进厨房时重复建条
-    const saved = await api.saveRecipe(store.recipe);
-    store.recipe.id = saved.id;
-    await refreshRecipes();
-  } catch (err) { /* 保存失败不阻断进入厨房 */ }
-  store.cookPhase = 'weigh';
-  store.page = 'cook';
-  window.scrollTo(0, 0);
+    if (!store.recipe.name) store.recipe.name = autoRecipeName(store.recipe.items, store.foods);
+    recipeName.value = store.recipe.name;
+    try {
+      // 必须回写返回的 id：工作区未绑定时这里新建了条目，不回写会在下次去做饭时重复建条
+      const saved = await api.saveRecipe(store.recipe);
+      store.recipe.id = saved.id;
+      await refreshRecipes();
+    } catch (err) { /* 保存失败不阻断做饭 */ }
+    cookView.value = true;
+    window.scrollTo(0, 0);
+  } finally {
+    saving.value = false;
+  }
 }
 </script>
 
 <template>
-  <section class="compose">
+  <!-- 做饭子视图：分装 → 批次登记（05 并入本页，关闭即回配方） -->
+  <CookPanel v-if="cookView" @close="cookView = false" />
+
+  <section v-else class="compose">
     <div class="food-side">
+      <!-- 段A：今日目标只读总览（点卡到「目标」页调整，本页不改目标） -->
+      <button class="goal-strip" type="button" @click="goGoal" aria-label="查看今日目标">
+        <span class="gs-main">
+          <span class="gs-day">{{ goalStrip.day }}</span>
+          <span class="gs-quota mono">今日目标 碳 {{ goalStrip.c }} · 蛋 {{ goalStrip.p }} · 脂 {{ goalStrip.f }}g · {{ goalStrip.kcal }} kcal</span>
+        </span>
+        <svg class="ic gs-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+      </button>
+
       <RecipeLibBar :name="recipeName" :recipes="recipeLib" :current-id="store.recipe.id" :bound-name="boundName"
         @update:name="recipeName = $event" @save="saveRecipeToLib" @save-as="saveAsNew"
-        @load="loadRecipe" @delete="deleteRecipeFromLib" />
+        @load="loadRecipe" @delete="deleteRecipeFromLib" @rename="renameRecipe" />
+
+      <!-- 段B-1：常用 Top20（配方库历史频次，点一下 = +1 份，无弹窗无确认） -->
+      <div v-if="quickFoods.length" class="quick-sec">
+        <span class="quick-lab">常用</span>
+        <div class="quick-row">
+          <button v-for="f in quickFoods" :key="f.id" class="quick-chip" type="button" @click="addServings(f.id)">
+            {{ f.name }}<i>＋</i>
+          </button>
+        </div>
+      </div>
 
       <div class="list-head">
         <span class="list-head-tip">{{ pickedCount }} 种已选</span>
         <button v-if="pickedCount" class="btn ghost sm clear-all" type="button" @click="clearAll">取消所有选择</button>
       </div>
 
-      <div class="recipe-groups">
+      <!-- 段B-2：已选清单（生成成功后重放 300ms 渐显） -->
+      <div class="recipe-groups gen-anim" :key="genTick">
         <section v-for="g in groups" :key="g.key" class="food-group">
           <div class="group-head">
             <span class="group-name">{{ g.label }}</span>
@@ -486,11 +554,12 @@ async function goCook() {
           <PickedRow v-for="r in g.rows" :key="r.id" :food="r.food" :grams="r.grams"
             :locked="(store.recipe.locked || []).includes(r.id)" :portions="store.recipe.portions"
             @step="stepFood(r.id, $event)" @lock="toggleLock(r.id)" @remove="removeFood(r.id)" />
-          <div v-if="!g.rows.length" class="group-empty">暂无，点「＋ 添加」</div>
+          <div v-if="!g.rows.length" class="group-empty">暂无，点「＋ 添加」或点上方常用食材</div>
         </section>
       </div>
 
-      <!-- 食材库弹层：左栏常驻配方结构，挑食材时才按需调出（默认筛到被点的类别） -->
+      <!-- 食材库弹层：左栏常驻配方结构，挑食材时才按需调出（默认筛到被点的类别）。
+           点击即入 = 已存在 +1 份 / 不存在新行 1 份，无弹窗无确认；移除走已选行删除钮 -->
       <div v-if="pickerOpen" class="picker-mask" @click.self="closePicker">
         <section class="picker" role="dialog" aria-modal="true" aria-label="食材库">
           <header class="picker-head">
@@ -513,7 +582,7 @@ async function goCook() {
               </div>
               <FoodRow v-for="f in visibleFoods" :key="f.id" :food="f" :grams="store.recipe.items[f.id] ?? null"
                 :locked="(store.recipe.locked || []).includes(f.id)" pick-only
-                @toggle="toggleFood" @delete-food="removeCustomFood" />
+                @toggle="addServings" @delete-food="removeCustomFood" />
             </div>
           </div>
 
@@ -526,13 +595,16 @@ async function goCook() {
 
     <aside class="summary">
       <div class="sum-card">
+        <!-- 段C：生成与保存（生成中反馈 + 300ms 渐显 + 保存 toast / 震动） -->
         <div class="sum-sec auto-gen">
           <h3 class="sum-title">自动搭配 <span class="sum-sub">按减脂目标生成克数</span></h3>
           <div class="gen-row">
             <Stepper v-model="store.days" :min="1" :max="4" mono />
             <span class="st-hint">{{ store.days }} 天 · {{ store.days * mealsPerDay }} 份</span>
           </div>
-          <button class="btn primary gen-btn" type="button" @click="autoGen">生成搭配</button>
+          <button class="btn primary gen-btn" type="button" :disabled="genBusy" @click="autoGen">
+            {{ genBusy ? '生成中…' : '生成搭配' }}
+          </button>
           <p class="gen-note">只勾主食 / 蛋白 / 蔬菜，油量与克数按每份目标自动补齐；鸡蛋按个、油按勺取整，生成后可微调</p>
         </div>
 
@@ -611,8 +683,9 @@ async function goCook() {
           </div>
         </div>
 
-        <button class="btn primary xl" type="button" :disabled="!Object.keys(store.recipe.items).length" @click="goCook">
-          进入厨房称重
+        <button class="btn primary xl" type="button"
+          :disabled="!Object.keys(store.recipe.items).length || saving" @click="openCook">
+          {{ saving ? '准备中…' : '去做饭 · 分装入库' }}
         </button>
       </div>
     </aside>

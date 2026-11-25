@@ -131,6 +131,24 @@ function pickSpecial(key, value) {
     }
     return n;
   }
+  if (key === 'restSeconds') {
+    // 07 组间倒计时（秒）：跟练模式里每组之间自动倒数多久。默认 90、下限 30（太短组间恢复不足）、
+    // 上限 300（更长就该手动休息了）；非整数一律 400 —— 倒计时 UI 无法按小数运转
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 30 || n > 300) {
+      throw new HttpError(400, 'restSeconds 必须为 30–300 的整数');
+    }
+    return n;
+  }
+  if (key === 'fastGoalHours') {
+    // 08 轻断食：目标断食时长（小时）。默认 16（16:8）、下限 12（再短就是普通晚饭到早饭）、
+    // 上限 24（再长等于禁食一整天，不适合日常模式）；非整数一律 400 —— 进度环按小时划分刻度
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 12 || n > 24) {
+      throw new HttpError(400, 'fastGoalHours 必须为 12–24 的整数');
+    }
+    return n;
+  }
   if (key === 'current_recipe_id') {
     if (!Number.isInteger(Number(value)) || Number(value) <= 0) {
       throw new HttpError(400, 'current_recipe_id 必须为正整数');

@@ -106,6 +106,13 @@ export async function saveRecipe(recipe) {
   return recipe.id ? updateRecipe(recipe.id, recipe) : createRecipe(recipe);
 }
 
+/* 重命名库条目：只改那条自身，不动 current_recipe_id 指针
+ * （updateRecipe 会顺带把指针切到目标条——改名其他条目时不能误切） */
+export async function renameRecipe(id, name) {
+  const row = await req('GET', '/recipes/' + id);
+  return req('PUT', '/recipes/' + id, recipeBody(Object.assign({}, row, { name })));
+}
+
 export async function deleteRecipe(id) {
   return req('DELETE', '/recipes/' + id);
 }
@@ -161,13 +168,30 @@ export async function saveDayLog(date, log) {
 
 export async function fetchWeights() {
   const list = await req('GET', '/weights');
-  return list.map(w => ({ d: w.date, kg: w.kg }));
+  // 06 独立体重页：body_fat 透传（undefined = 该日没量体脂，旧备份/旧行兼容）
+  return list.map(w => ({ d: w.date, kg: w.kg, bodyFat: w.body_fat }));
 }
 
-export async function addWeight(kg, date) {
+export async function addWeight(kg, date, bodyFat) {
   // 必须把浏览器的"今天"传给后端：容器跑 UTC，服务端日期会比本地晚一天
-  await req('POST', '/weights', { kg, date: date || dateKey() });
+  // bodyFat 留空 = 本次不录体脂，后端不动旧行的 body_fat（不清掉上次量的值）
+  const payload = { kg, date: date || dateKey() };
+  if (bodyFat !== undefined && bodyFat !== null && bodyFat !== '') payload.body_fat = Number(bodyFat);
+  await req('POST', '/weights', payload);
   return fetchWeights();
+}
+
+/* ===== 围度记录（06 独立体重页）===== */
+
+export async function fetchMeasurements(part) {
+  const q = part ? '?part=' + encodeURIComponent(part) : '';
+  return req('GET', '/measurements' + q);
+}
+
+/* 新增一条围度记录：{ date, part, value }；一天可多条并列存趋势，展示取最新 */
+export async function addMeasurement(payload) {
+  const m = await req('POST', '/measurements', payload);
+  return m;
 }
 
 /* ===== 有氧（T-114） ===== */
@@ -216,6 +240,60 @@ export async function addWorkout(w) {
 
 export async function deleteWorkout(id) {
   return req('DELETE', '/training/workouts/' + encodeURIComponent(id));
+}
+
+/* ===== 07 训练系统升级：动作库 / 课表库 / 排课 ===== */
+
+/* 动作库（含 builtin 19 + 用户自定义 + ExerciseDB 导入）：enabled 过滤默认由后端做，
+ * 这里传 1 只拉未停用动作；停用动作仅动作库管理页（?enabled=0|1 省略 = 全量）需要 */
+export async function fetchExercises(enabled) {
+  return req('GET', '/exercises' + (enabled === undefined ? '' : '?enabled=' + (enabled ? 1 : 0)));
+}
+
+export async function addExercise(ex) {
+  return req('POST', '/exercises', ex);
+}
+
+export async function updateExercise(key, patch) {
+  return req('PUT', '/exercises/' + encodeURIComponent(key), patch);
+}
+
+/* 课表库（A/B/C builtin + 用户 P<n>）：days 内嵌 days[].items[]（seq/ord 有序） */
+export async function fetchPlans() {
+  return req('GET', '/plans');
+}
+
+export async function savePlan(plan) {
+  // PUT 更新已有 / POST 新建由调用方按 plan.id 是否为 null 区分（与 saveRecipe 同构）
+  return plan.id
+    ? req('PUT', '/plans/' + encodeURIComponent(plan.key), plan)
+    : req('POST', '/plans', plan);
+}
+
+export async function deletePlan(key) {
+  return req('DELETE', '/plans/' + encodeURIComponent(key));
+}
+
+/* 一键生成周课表（预览不落库）：goal gain|cut|maintain、days 2-6；
+ * 返回 {name, days:[{label, items:[{exerciseKey, sets, repsTarget, ord}]}]}，调用方确认后再 savePlan */
+export async function generatePlan(goal, days) {
+  return req('GET', '/plans/generate?goal=' + encodeURIComponent(goal) + '&days=' + days);
+}
+
+/* 排课表：from/to 可选；行形状 {date, planKey, dayId, rest} */
+export async function fetchSchedule(from, to) {
+  const qs = [];
+  if (from) qs.push('from=' + encodeURIComponent(from));
+  if (to) qs.push('to=' + encodeURIComponent(to));
+  return req('GET', '/schedule' + (qs.length ? '?' + qs.join('&') : ''));
+}
+
+export async function putSchedule(date, entry) {
+  return req('PUT', '/schedule/' + date, entry);
+}
+
+export async function deleteSchedule(date) {
+  return req('DELETE', '/schedule/' + date);
 }
 
 /* ===== 规则引擎状态 ===== */

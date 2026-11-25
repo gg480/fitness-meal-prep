@@ -5,6 +5,7 @@
  * 用户补删记录后历史读数自动跟随，不会被旧参数污染（与「kcal 不入库」同理）。
  */
 import { dateKey } from './utils.js';
+import { weekStartKey } from './cardio.js';
 
 /* ===== 动作枚举（SPEC 7.1：19 个，key 只增不改） =====
  * 与后端 seed.js 的 EXERCISE_KEYS 逐值一致，改一边必须同步另一边（同 CARDIO_FORMS 哲学）。
@@ -201,4 +202,29 @@ export function progressionHint(history, opts) {
     return { action: 'deload', reason: '期龄 6–8 周，建议主动降量 deload 一周' };
   }
   return { action: null, reason: '' };
+}
+
+/**
+ * 周活动量（SPEC §7.8 双环口径）：有氧看分钟（150–300 目标带）、力量看次数（每周 ≥2 练）。
+ * 两种口径不混折——力量课时不折算成有氧分钟（强度/时长分布完全不同）。
+ * @param {Array<{date:string}>} workouts 力量课记录（近 90 天全量，函数内部按本周窗口过滤）
+ * @param {Array<{date:string, minutes:number}>} cardioLogs 有氧记录全量（函数内部按本周窗口过滤）
+ * @param {string} todayKey 今天 YYYY-MM-DD
+ * @returns {{weekFrom:string, cardioMin:number, cardioPct:number, cardioZone:'low'|'ok'|'high',
+ *            strengthCount:number, strengthPct:number, strengthZone:'low'|'ok'|'high'}}
+ */
+export function weekActivity(workouts, cardioLogs, todayKey) {
+  const weekFrom = weekStartKey(todayKey);
+  const inWeek = r => r && r.date && r.date >= weekFrom && r.date <= todayKey;
+  const wk = (Array.isArray(workouts) ? workouts : []).filter(inWeek);
+  const cl = (Array.isArray(cardioLogs) ? cardioLogs : []).filter(inWeek);
+  // 有氧分钟：缺失/非数值按 0 计（cardio_logs.minutes 是 NOT NULL，防御旧数据）
+  const cardioMin = Math.round(cl.reduce((s, r) => s + (Number.isFinite(Number(r.minutes)) ? Number(r.minutes) : 0), 0));
+  // 目标带 150–300：150 达标，>300 超带警示（展示层 pct 以 150 为分母、100 封顶）
+  const cardioPct = Math.max(0, Math.min(100, Math.round((cardioMin / 150) * 100)));
+  const cardioZone = cardioMin > 300 ? 'high' : cardioMin >= 150 ? 'ok' : 'low';
+  const strengthCount = wk.length;
+  const strengthPct = Math.max(0, Math.min(100, Math.round((strengthCount / 2) * 100)));
+  const strengthZone = strengthCount >= 2 ? 'ok' : 'low';
+  return { weekFrom, cardioMin, cardioPct, cardioZone, strengthCount, strengthPct, strengthZone };
 }

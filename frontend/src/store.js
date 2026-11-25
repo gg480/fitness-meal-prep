@@ -21,8 +21,12 @@ export const store = reactive({
   inventory: [],
   daylogs: {},
   weights: [],
+  measurements: [],                    // 06 独立体重页：围度六部位全量（waist/hip/大臂左右/大腿左右），WeightView 取最新展示
   cardio: [],                          // 有氧记录全量（T-114）：原始记录，消耗与置换量由 cardioSummary 现算
   workouts: [],                        // 力量训练全量（v3.0）：轮换指针 / 回归期阶段由 training.js 现算
+  plans: [],                           // 07 课表库（A/B/C builtin + 用户 P<n>）：/api/plans 全量，days 内嵌 items
+  exercises: [],                       // 07 动作库（enabled=1）：名称/器械/类别，动作名与指引弹窗共用
+  schedule: [],                        // 07 排课表：[{date, planKey, dayId, rest}]，周历读时派生顺延不改库
   training: { active: false, planKey: null }, // 训练进行中标志：今日页状态条与训练页共用
   ruleState: { ignored: {}, history: [] },
   today: Object.assign({}, DEFAULT_TODAY),
@@ -31,8 +35,6 @@ export const store = reactive({
   packPortions: DEFAULT_PORTIONS,
   packAllocation: {},                  // 本次分装的餐次归属（与 packPortions 配对，登记入库时随批次落库）
   lastBatchId: '',
-  weigh: {},                           // foodId -> true（已称）
-  cookPhase: 'weigh',                  // weigh / pack / done
   cat: 'all', q: '', days: 3, addonsOn: true
 });
 
@@ -218,10 +220,12 @@ export async function initStore() {
     // 训练取近 90 天（SPEC 7.4）：覆盖轮换指针与回归期推导所需的全部历史
     const since = new Date();
     since.setDate(since.getDate() - 90);
-    const [foods, settings, recipes, inventory, daylogs, weights, ruleState, cardioLogs, workouts] = await Promise.all([
+    const [foods, settings, recipes, inventory, daylogs, weights, ruleState, cardioLogs, workouts, measurements, plans, exercises, schedule] = await Promise.all([
       api.fetchFoods(), api.fetchSettings(), api.fetchRecipes(),
       api.fetchInventory(), api.fetchDayLogs(), api.fetchWeights(),
-      api.fetchRuleState(), api.fetchCardio(), api.fetchWorkouts(dateKey(since))
+      api.fetchRuleState(), api.fetchCardio(), api.fetchWorkouts(dateKey(since)),
+      api.fetchMeasurements(), // 06 独立体重页：围度全量拉一次（量小，无需分页）
+      api.fetchPlans(), api.fetchExercises(1), api.fetchSchedule() // 07 训练升级：课表库/动作库/排课全量
     ]);
     store.foods = foods;
     store.settings = Object.assign({}, SETTINGS_FALLBACK, settings);
@@ -229,9 +233,13 @@ export async function initStore() {
     store.inventory = inventory;
     store.daylogs = daylogs;
     store.weights = weights;
+    store.measurements = measurements; // 06 独立体重页：围度记录入库
     store.ruleState = ruleState;
     store.cardio = cardioLogs;
     store.workouts = workouts;
+    store.plans = plans;           // 07 课表库（builtin 前，key 升序——后端保证）
+    store.exercises = exercises;   // 07 动作库（enabled=1）
+    store.schedule = schedule;     // 07 排课表（date 升序）
     const cur = recipes.find(r => r.id === store.settings.current_recipe_id) || recipes[0] || null;
     store.recipe = cur
       ? {

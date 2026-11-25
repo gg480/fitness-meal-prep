@@ -2,11 +2,12 @@
 /* 今日页（F5 一次性打卡 + 二开机动加餐 + 本日体重 + F7 库存）：
  * 正餐先在步进器上定份数，点「打卡」时一次性扣库存并生成等量事件后锁定，回撤则全额回补；
  * 蛋白粉/早餐/晚加餐为快捷食材 chips 点选录克数 */
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { store, profile, profileWithCardio, outingPenalty, cardio, latestPer, todayIntake, foodById, fifoQueue, streak, SLOT_LABEL, mealStage, mealsPerDay, todayDayType, hasWorkoutToday } from '../store';
 import * as api from '../api';
 import { toast } from '../toast';
-import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, intakeBreakdown, portionOfSlot, canAddHalf, createSaveQueue, dishesTotalKcal, mergeOutingForDishes } from '../utils';
+import { dateKey, normDaylog, dayIntake, normExtras, sumExtras, addonNutri, naturalOf, qtyText, mealTargets, statusOf, pctText, round1, fmtQty, normOuting, outingNutri, outingUnits, adjustForOuting, intakeBreakdown, portionOfSlot, canAddHalf, createSaveQueue, dishesTotalKcal, mergeOutingForDishes, deviOf, macroRatio } from '../utils';
+import { isBackfill } from '../training';
 import { QUICK_FOODS, WHEY_SCOOP, CAT_DEFAULT_G, TRAIN_SLOTS, PACK_SLOTS, DAY_TYPES, MEAL_SLOTS, OUTING_TYPES, OUTING_LEVELS, ALCOHOL_UNIT_TEXT, OUTING_MAX_BAIJIU, OUTING_MAX_BEER, PORTION_SLOTS, DAILY_ROWS } from '../constants';
 import Stepper from '../components/Stepper.vue';
 import StatBars from '../components/StatBars.vue';
@@ -59,6 +60,20 @@ function goTraining() {
   store.page = 'training';
   window.scrollTo(0, 0);
 }
+/* 10 一览区跳页：体重/目标页直达 */
+function goPage(key) {
+  store.page = key;
+  window.scrollTo(0, 0);
+}
+/* 一览区体重卡数据：今日已录 ✓ / 最新一次 kg + 距目标差 */
+const dashWeight = computed(() => {
+  const today = (store.weights || []).find(w => w.d === dateKey());
+  const last = (store.weights || []).length ? store.weights[store.weights.length - 1] : null;
+  const kg = today ? today.kg : (last ? last.kg : null);
+  const goal = Number(store.settings.targetWeight) || null;
+  const diff = kg && goal ? Math.round((kg - goal) * 10) / 10 : null;
+  return { hit: !!today, kg, goal, diff };
+});
 
 /* 今日进度环：kcal 达成度钳 0-1，环满表示达标；SVG 圆周长 2πr=314.16。
  * 目标用叠加了有氧置换的 profileWithCardio：置换出来的热量是允许吃的，环的读取口径要跟着上浮 */
@@ -715,11 +730,9 @@ function itemsSummary(b) {
 function goCook() {
   if (!Object.keys(store.recipe.items).length) {
     toast('请先在配方页组好配方');
-    store.page = 'recipe';
-    return;
   }
-  store.cookPhase = 'weigh';
-  store.page = 'cook';
+  /* 05 做饭并入配方页子视图：无论有无配方都去配方页（空配方由配方页自行拦截引导） */
+  store.page = 'recipe';
 }
 
 /* ===== 饮食补录（v3.1，SPEC 7.7）：共用「历史日期」日历入口 =====
@@ -784,6 +797,192 @@ async function saveBackfill() {
     toast(err.message);
   }
 }
+
+/* ===== T-141 轻断食计时（08 详设 §2/§3）=====
+ * 手动为主：点「开始」记 lastMealTs（上次进食时刻，默认当前时刻）；计时是纯前端展示
+ * （setInterval 分钟级刷新，进度 = now − lastMealTs），结束记 endedTs 落账（跨日断食按
+ * 「结束日记录」哲学，endedTs 落在结束当日）。不做通知、不参与规则引擎（详设 §6 YAGNI）。
+ * 结构同 outing：store.today.fastState = {goal,lastMealTs,manual,endedTs} | null，
+ * 后端 normalizeFastState 白名单校验（goal 12–24 / ts 正整数毫秒 / endedTs ≥ lastMealTs） */
+
+/* 进行中断食（endedTs 为空 = 还在计时中） */
+const fastState = computed(() => store.today.fastState || null);
+
+/* 分钟级刷新滴答：模板时间文案都从它派生，保证「已断食 Xh Ym」每分钟走字 */
+const fastNow = ref(Date.now());
+let fastTimer = null;
+onMounted(() => { fastTimer = setInterval(() => { fastNow.value = Date.now(); }, 30000); });
+onBeforeUnmount(() => { if (fastTimer) clearInterval(fastTimer); });
+
+/* 已断食分钟数（进行中）；endedTs 已落账 = 固定时长 */
+function fastElapsedMin(f) {
+  if (!f || !f.lastMealTs) return null;
+  const end = f.endedTs || fastNow.value;
+  return Math.max(0, Math.round((end - f.lastMealTs) / 60000));
+}
+
+/* 「已断食 X 小时 Y 分」文案（进度环与副注共用） */
+function fastDurText(min) {
+  if (min == null) return '';
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h > 0 ? `${h} 小时 ${m} 分` : `${m} 分钟`;
+}
+
+/* 进度环百分比（>100 按满环展示，文案里另给超出提示） */
+const fastPct = computed(() => {
+  const f = fastState.value;
+  if (!f || f.endedTs) return 0;
+  const min = fastElapsedMin(f);
+  const goalMin = (Number(f.goal) || 16) * 60;
+  if (!goalMin) return 0;
+  return Math.min(100, Math.round((min / goalMin) * 100));
+});
+
+/* 昨日断食文案（「上次: 昨日 14.5 小时」）：读 daylogs 昨日 fastState */
+const fastLastText = computed(() => {
+  const y = new Date();
+  y.setDate(y.getDate() - 1);
+  const prev = store.daylogs[dateKey(y)]?.fastState;
+  if (!prev || prev.endedTs == null || !prev.lastMealTs) return '';
+  const min = Math.round((prev.endedTs - prev.lastMealTs) / 60000);
+  if (min <= 0) return '';
+  return `上次: ${fastDurText(min)}`;
+});
+
+/* 开始断食：lastMealTs 默认当前时刻；manual=true（手动开始，回推兜底不再覆盖） */
+function startFast() {
+  if (fastState.value) return;
+  store.today.fastState = {
+    goal: Math.min(24, Math.max(12, Number(store.settings.fastGoalHours) || 16)),
+    lastMealTs: Date.now(),
+    manual: true,
+    endedTs: null,
+  };
+  persistToday();
+  toast(`已开始 ${store.today.fastState.goal}:8 断食`);
+}
+
+/* 结束断食：endedTs=当前时刻落账（同日；跨日断食 endedTs 自然落结束日） */
+function endFast() {
+  const f = fastState.value;
+  if (!f || f.endedTs) return;
+  f.endedTs = Date.now();
+  const min = Math.round((f.endedTs - f.lastMealTs) / 60000);
+  store.today.fastState = { ...f };
+  persistToday();
+  if (navigator.vibrate) navigator.vibrate(20);
+  toast(`本次断食 ${fastDurText(Math.max(0, min))}`);
+}
+
+/* 放弃本次断食：整条置 null（未达成也没必要留半截记录） */
+function clearFast() {
+  if (!fastState.value) return;
+  store.today.fastState = null;
+  persistToday();
+}
+
+/* —— 首餐回推兜底（详设 §3）：没点「开始」但今天已记了第一餐 ——
+ * 断食窗口 = 昨晚末餐 → 今日首餐。无昨夜数据时退化为「醒来 → 首餐」不可推，
+ * 则显示不出隔窗，只在有昨晚末餐事件时给出一键采纳 */
+const fastInfer = computed(() => {
+  if (fastState.value) return null;           // 已有手动记录，兜底不介入
+  const ml = store.today.mealsLog || [];
+  // 今日首笔实际进食事件（portion 或 outing，按 ts 升序）
+  const eaten = ml.filter(e => e && e.kind && e.ts)
+    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  if (!eaten.length) return null;
+  const firstTs = new Date(eaten[0].ts).getTime();
+  // 昨晚末餐：昨日日志里最后一笔进食事件 ts（无则推不出隔窗）
+  const y = new Date();
+  y.setDate(y.getDate() - 1);
+  const prev = store.daylogs[dateKey(y)];
+  const prevEaten = (prev && Array.isArray(prev.mealsLog) ? prev.mealsLog : [])
+    .filter(e => e && e.kind && e.ts)
+    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  if (!prevEaten.length) return null;
+  const lastTs = new Date(prevEaten[prevEaten.length - 1].ts).getTime();
+  const min = Math.round((firstTs - lastTs) / 60000);
+  if (min <= 0) return null;
+  return { firstTs, lastTs, min };
+});
+
+/* 一键采纳回推结果：落成已结束记录（endedTs=首餐 ts，manual=false=兜底来源） */
+function adoptInferred() {
+  const inf = fastInfer.value;
+  if (!inf) return;
+  store.today.fastState = {
+    goal: Math.min(24, Math.max(12, Number(store.settings.fastGoalHours) || 16)),
+    lastMealTs: inf.lastTs,
+    manual: false,
+    endedTs: inf.firstTs,
+  };
+  persistToday();
+  toast(`已记录隔窗断食 ${fastDurText(inf.min)}`);
+}
+
+/* —— 10 每日饮食回溯（自 LogView 归并，函数本体零改动，仅数据源已是 store.daylogs） —— */
+
+/* T-109 锅+餐次聚合：把一天内的打卡事件按「锅 × 餐次」聚成行 */
+function groupPots(log) {
+  const order = [];
+  const map = new Map();
+  for (const e of (log.mealsLog || [])) {
+    if (!e || e.kind) continue;               // 只认实物打卡（防 portion/outing 幻影）
+    const name = e.batchName || '未命名锅';
+    const slot = e.slot || '';
+    const key = name + '|' + slot;
+    if (!map.has(key)) {
+      const row = { key, name, slot, slotLabel: slot ? (SLOT_LABEL[slot] || slot) : '未标餐次', count: 0, kcal: 0 };
+      map.set(key, row);
+      order.push(row);
+    }
+    const row = map.get(key);
+    row.count = round1(row.count + (Number(e.portions) || 1));
+    row.kcal += Number(e.per && e.per.kcal) || 0;
+  }
+  return order;
+}
+
+/* 回溯天数序列：daylogs 键 ∪ 训练日期，倒序；每天附 intake/偏差/周几/锅行/宏占比/该日训练 */
+const dietHistory = computed(() => {
+  const days = new Set(Object.keys(store.daylogs));
+  (store.workouts || []).forEach(w => days.add(w.date));
+  return [...days].sort((a, b) => b.localeCompare(a)).map(d => {
+    const log = normDaylog(store.daylogs[d]);
+    const per = log.perSnap || latestPer.value;
+    const intake = dayIntake(log, per, store.foods);
+    const dKcal = deviOf(intake.kcal, profile.value.kcal);
+    const week = weekCn[new Date(d + 'T00:00:00').getDay()];
+    const pots = groupPots(log);
+    const ratio = macroRatio(intake);
+    const ws = (store.workouts || []).filter(w => w.date === d);
+    return { d, log, intake, dKcal, week, pots, ratio, ws };
+  });
+});
+
+/* 热量达标天数：偏差 ≤ ±10% */
+const achieveDays = computed(() => dietHistory.value.filter(h => Math.abs(h.dKcal) <= 0.10).length);
+
+/* 早餐/晚加餐食材清单文案 */
+function addonText(list) {
+  return (list || []).map(it => {
+    const f = foodById(it.id);
+    return f ? f.name + ' ' + it.g + 'g' : '未知食材';
+  }).join(' + ');
+}
+
+/* 外食/喝酒一条文案（类型+档位估算+酒单位+折算热量） */
+function outingText(o) {
+  const n = outingNutri(o);
+  const type = (OUTING_TYPES.find(t => t.id === o.type) || {}).label || o.type;
+  const lv = OUTING_LEVELS.find(l => l.id === o.level);
+  const units = outingUnits(o);
+  const parts = [];
+  if (lv) parts.push(lv.label + '（估算）');
+  if (units > 0) parts.push('酒 ' + units + ' 单位');
+  return type + (parts.length ? ' · ' + parts.join(' · ') : '') + ' · ≈ ' + n.kcal + ' kcal（碳水 ' + n.c + 'g）';
+}
 </script>
 
 <template>
@@ -796,7 +995,7 @@ async function saveBackfill() {
       <template v-else>
         今日 · <span class="mono">{{ todayLabel }}</span>
         <span class="streak-chip" v-if="streak">🔥 {{ streak }} 天</span>
-        <button type="button" class="cal-btn" @click="showCal = true">补录</button>
+        <button type="button" class="cal-btn" @click="showCal = true">历史 · 补录</button>
       </template>
     </div>
 
@@ -844,6 +1043,28 @@ async function saveBackfill() {
     </template>
 
     <template v-else>
+
+    <!-- 10 一览区：体重 / 训练 / 饮食三卡直达（纯展示，数据全复用 store computed） -->
+    <div class="dash-grid">
+      <button type="button" class="dash-card" @click="goPage('weight')">
+        <span class="dash-label">体重</span>
+        <b class="dash-value mono">{{ dashWeight.kg ? dashWeight.kg + ' kg' : '—' }}</b>
+        <span class="dash-sub" v-if="dashWeight.hit">今日已录 ✓</span>
+        <span class="dash-sub" v-else-if="dashWeight.diff != null">距目标 {{ dashWeight.diff > 0 ? '+' : '' }}{{ dashWeight.diff }} kg</span>
+        <span class="dash-sub" v-else>先记录一次体重</span>
+      </button>
+      <button type="button" class="dash-card" @click="goTraining">
+        <span class="dash-label">训练</span>
+        <b class="dash-value">{{ trainStatus.cls === 'done' ? '已完成' : trainStatus.cls === 'go' ? '进行中' : '未开始' }}</b>
+        <span class="dash-sub">{{ trainStatus.text }}</span>
+      </button>
+      <button type="button" class="dash-card" @click="goPage('goal')">
+        <span class="dash-label">饮食</span>
+        <b class="dash-value mono">{{ Math.round(breakdown.total.kcal) }}<i class="dash-unit"> / {{ profileWithCardio.kcal }} kcal</i></b>
+        <span class="dash-sub" v-if="checkedIn">今日已打卡</span>
+        <span class="dash-sub" v-else>目标 {{ profileWithCardio.kcal }} kcal · 点击查看差额</span>
+      </button>
+    </div>
 
     <!-- 训练状态条（v3.0）：三态可点直达训练页，今日页其余布局一字不动 -->
     <button type="button" class="train-status-bar" :class="trainStatus.cls" @click="goTraining">
@@ -998,6 +1219,60 @@ async function saveBackfill() {
           <!-- T-137：已登记态同样给按菜品记录入口（粗档位登记后仍可细化为菜品明细） -->
           <button class="btn ghost sm" type="button" @click="showDishSheet = true">按菜品记录</button>
           <button class="btn ghost sm" type="button" @click="clearOuting">删除记录（各餐目标回落）</button>
+        </div>
+      </template>
+    </div>
+
+    <!-- 轻断食（T-141）：手动为主 —— 点「开始」记上次进食时刻，计时纯前端展示（分钟级刷新）；
+         结束记 endedTs 落账；没点开始但已记第一餐时给「隔窗」一键采纳（08 详设 §3 兜底） -->
+    <div class="card">
+      <div class="card-title">轻断食
+        <span v-if="fastState && fastState.endedTs == null" class="sum-sub">进行中</span>
+        <span v-else-if="fastState" class="done-tag">已结束</span>
+        <span class="sum-sub">目标 {{ store.settings.fastGoalHours }} 小时（{{ store.settings.fastGoalHours }}:{{ 24 - store.settings.fastGoalHours }}）</span>
+      </div>
+
+      <!-- 未开始：上次断食时长 + 隔窗回推兜底 -->
+      <template v-if="!fastState">
+        <p v-if="fastLastText" class="st-hint">{{ fastLastText }}</p>
+        <p v-else class="st-hint">今晚饭后点「开始」，到明天第一餐前不看钟也能看到坚持了多久。</p>
+        <div v-if="fastInfer" class="addon-note is-advise fast-infer">
+          <span>没点开始但已记录今天第一餐：按「昨晚末餐 → 今日首餐」推算隔窗约 {{ fastDurText(fastInfer.min) }}。</span>
+          <button class="btn ghost sm" type="button" @click="adoptInferred">采纳为已结束记录</button>
+        </div>
+        <div class="btn-row mt16">
+          <button class="btn primary xl" type="button" @click="startFast">开始 {{ store.settings.fastGoalHours }}:{{ 24 - store.settings.fastGoalHours }} 断食</button>
+        </div>
+      </template>
+
+      <!-- 进行中：环形进度 + 已断食时长 + 结束/放弃 -->
+      <template v-else-if="fastState.endedTs == null">
+        <div class="fast-live">
+          <svg class="fast-ring" viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="fast-ring-bg" cx="60" cy="60" r="52"></circle>
+            <circle class="fast-ring-fg" cx="60" cy="60" r="52"
+              :stroke-dasharray="String(2 * Math.PI * 52)"
+              :stroke-dashoffset="String(2 * Math.PI * 52 * (1 - fastPct / 100))"></circle>
+          </svg>
+          <div class="fast-center">
+            <b class="mono">{{ fastDurText(fastElapsedMin(fastState)) }}</b>
+            <span>已断食 / 目标 {{ fastState.goal }} 小时</span>
+          </div>
+        </div>
+        <p class="addon-note">
+          {{ fastPct >= 100 ? '目标已达成 🎉 想继续就继续记着。' : ('距目标还差 ' + fastDurText(fastState.goal * 60 - (fastElapsedMin(fastState) || 0))) }}
+        </p>
+        <div class="btn-row mt16">
+          <button class="btn primary xl" type="button" @click="endFast">吃第一餐 · 结束</button>
+          <button class="btn ghost sm" type="button" @click="clearFast">放弃</button>
+        </div>
+      </template>
+
+      <!-- 已结束：时长落账展示 -->
+      <template v-else>
+        <p class="st-hint">本次断食 {{ fastDurText(fastElapsedMin(fastState)) }}（{{ fastState.manual ? '手动记录' : '按第一餐回推' }}）</p>
+        <div class="btn-row mt16">
+          <button class="btn ghost sm" type="button" @click="clearFast">清除本条记录</button>
         </div>
       </template>
     </div>
@@ -1260,6 +1535,43 @@ async function saveBackfill() {
       </ul>
       <button class="btn primary xl" type="button" @click="goCook">去做饭</button>
     </div>
+
+    <!-- 10 每日饮食回溯（自记录页归并）：按天回看摄入/宏占比/训练，与历史补录共用日历入口 -->
+    <div class="sec-head">
+      <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>
+      <b>每日饮食回溯</b>
+    </div>
+    <p class="t-note">按天查看实际吃下多少，热量徽标为当天摄入 vs 目标 {{ profile.kcal }} kcal 的偏差 · 已达标 <b class="mono">{{ achieveDays }}</b>/{{ dietHistory.length }} 天</p>
+    <p class="empty" v-if="!dietHistory.length">暂无打卡记录，去今日页完成每日打卡后这里会按天生成回溯卡片</p>
+    <div class="card history-card" v-for="h in dietHistory" :key="h.d">
+      <div class="history-date mono">
+        {{ h.d.slice(5) }}<i>周{{ h.week }}</i>
+        <span class="sat-tag" v-if="h.log.satiety">饱腹 {{ h.log.satiety }}/5</span>
+        <template v-for="w in h.ws" :key="w.id">
+          <span class="wk-tag">力量 · 课表{{ w.planKey }}</span>
+          <span class="bf-badge" v-if="isBackfill(w)">补录</span>
+        </template>
+      </div>
+      <div class="history-main">
+        <div class="history-item" v-for="p in h.pots" :key="p.key">
+          <b>🍚 {{ p.name }}</b>
+          <span>{{ p.slotLabel }} · {{ fmtQty(p.count) }} 份 · {{ Math.round(p.kcal) }} kcal</span>
+        </div>
+        <div class="history-item" v-if="!h.pots.length && h.log.meals">
+          <b>正餐</b><span>{{ fmtQty(h.log.meals) }} 份</span>
+        </div>
+        <div class="history-item" v-if="h.log.whey"><b>蛋白粉</b><span>{{ h.log.whey }} 勺</span></div>
+        <div class="history-item" v-if="h.log.breakfast.length"><b>早餐</b><span>{{ addonText(h.log.breakfast) }}</span></div>
+        <div class="history-item" v-if="h.log.late.length"><b>晚加餐</b><span>{{ addonText(h.log.late) }}</span></div>
+        <div class="history-item" v-if="h.log.outing"><b>外食/喝酒</b><span>{{ outingText(h.log.outing) }}</span></div>
+        <div class="ratio-bar"><i class="r-p" :style="{ width: (h.ratio.p * 100) + '%' }"></i><i class="r-c" :style="{ width: (h.ratio.c * 100) + '%' }"></i><i class="r-f" :style="{ width: (h.ratio.f * 100) + '%' }"></i></div>
+        <div class="ratio-legend mono">蛋白 {{ Math.round(h.ratio.p * 100) }}% · 碳水 {{ Math.round(h.ratio.c * 100) }}% · 脂肪 {{ Math.round(h.ratio.f * 100) }}%</div>
+      </div>
+      <div class="history-nutri mono">
+        <span class="bar-badge" :class="statusOf(h.dKcal)">{{ pctText(h.dKcal) }}</span>
+        {{ Math.round(h.intake.kcal) }}/{{ profile.kcal }} kcal · P{{ round1(h.intake.p) }} C{{ round1(h.intake.c) }} F{{ round1(h.intake.f) }}
+      </div>
+    </div>
     </template>
 
     <!-- 共用日历（训练页 / 今日页同一入口）：只允许选今天及以前的日期 -->
@@ -1307,4 +1619,44 @@ async function saveBackfill() {
 .intake-bar-rest { margin-left: auto; }
 .bar-over { color: #b45309; font-weight: 600; }
 .intake-bar-note { font-size: 12px; color: var(--muted, #888); margin: 0; }
+
+/* T-141 断食卡：环形进度（与成就卡 .achieve-ring 同视觉语言——绿主色、灰轨道、-90° 起笔） */
+.fast-live { position: relative; width: 120px; height: 120px; margin: 10px auto 4px; }
+.fast-ring { width: 100%; height: 100%; transform: rotate(-90deg); }
+.fast-ring-bg, .fast-ring-fg { fill: none; stroke-width: 10; }
+.fast-ring-bg { stroke: var(--line, #e5e7eb); }
+.fast-ring-fg { stroke: var(--primary, #2e7d32); stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
+.fast-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-align: center; }
+.fast-center b { font-size: 16px; color: var(--primary, #2e7d32); }
+.fast-center span { font-size: 11px; color: var(--muted, #888); }
+.fast-infer { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.fast-infer .btn { align-self: flex-start; }
+
+/* ===== 10 一览区三卡（体重/训练/饮食直达） ===== */
+.dash-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.dash-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; background: var(--card, #fff); border: 1px solid var(--line, #e5e7eb); border-radius: 14px; padding: 12px 12px 10px; cursor: pointer; }
+.dash-card:active { transform: scale(0.97); }
+.dash-label { font-size: 11px; color: var(--muted, #888); font-weight: 700; letter-spacing: 1px; }
+.dash-value { font-size: 18px; line-height: 1.2; color: var(--ink, #1a1a1a); }
+.dash-value .dash-unit { font-style: normal; font-size: 11px; font-weight: 400; color: var(--muted, #888); }
+.dash-sub { font-size: 11px; color: var(--muted, #888); }
+
+/* ===== 10 每日饮食回溯（自记录页归并） ===== */
+.history-card { margin-bottom: 12px; }
+.history-date { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.history-date i { font-style: normal; font-size: 11px; color: var(--muted, #888); font-weight: 400; }
+.sat-tag { font-size: 11px; color: #7a5b00; background: #fff8e1; border-radius: 8px; padding: 1px 6px; white-space: nowrap; }
+.wk-tag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--primary, #2e7d32); border: 1px solid var(--primary, #2e7d32); padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+.bf-badge { font-size: 11px; font-weight: 700; color: #7a5b00; border: 1px dashed #f0d77a; background: #fff8e1; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+.history-main { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.history-item { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.history-item b { flex: 0 0 auto; }
+.history-item span { color: var(--muted, #888); font-size: 12px; }
+.ratio-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line, #e5e7eb); }
+.ratio-bar i { display: block; height: 100%; }
+.r-p { background: #4f81ff; }
+.r-c { background: #f2a63b; }
+.r-f { background: #e4574f; }
+.ratio-legend { font-size: 11px; color: var(--muted, #888); }
+.history-nutri { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted, #888); }
 </style>

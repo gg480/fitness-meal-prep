@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2937">
+<title>健身助手二次开发 · 需求调研问卷 v1</title>
+<style>
+  :root{
+    --bg:#f3f4f6; --card:#ffffff; --ink:#111827; --ink2:#6b7280;
+    --accent:#ea580c; --accent-soft:#fff7ed; --ok:#16a34a;
+    --line:#e5e7eb; --radius:14px; --high:#dc2626;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:16px; line-height:1.55;
+    padding-bottom:calc(76px + env(safe-area-inset-bottom));
+  }
+  header{
+    background:linear-gradient(135deg,#1f2937 0%,#111827 100%);
+    color:#fff; padding:20px 16px 16px;
+  }
+  header h1{margin:0 0 6px;font-size:20px}
+  header p{margin:0;color:#d1d5db;font-size:14px}
+  header .meta{margin-top:10px;font-size:13px;color:#fbbf24}
+  main{padding:12px 12px 0;max-width:680px;margin:0 auto}
+  details.card{
+    background:var(--card); border-radius:var(--radius);
+    margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.06);
+    overflow:hidden;
+  }
+  details.card summary{
+    list-style:none; cursor:pointer; padding:14px 14px;
+    display:flex; align-items:center; gap:10px;
+    -webkit-tap-highlight-color:transparent;
+  }
+  details.card summary::-webkit-details-marker{display:none}
+  details.card summary .t{flex:1;min-width:0}
+  details.card summary .t b{font-size:17px}
+  details.card summary .t small{display:block;color:var(--ink2);font-size:13px;margin-top:2px}
+  .badge{
+    flex:none; font-size:12px; padding:3px 9px; border-radius:99px;
+    background:var(--line); color:var(--ink2); font-variant-numeric:tabular-nums;
+  }
+  .badge.done{background:#dcfce7;color:var(--ok)}
+  .chev{flex:none;color:var(--ink2);font-size:13px;transition:transform .2s}
+  details[open] .chev{transform:rotate(90deg)}
+  .sec-desc{padding:0 14px 10px;color:var(--ink2);font-size:13.5px}
+  .q{padding:6px 14px 14px;border-top:1px dashed var(--line)}
+  .q:first-of-type{border-top:none}
+  .q-label{margin:10px 0 4px;font-size:16px;font-weight:600}
+  .q-label .fire{color:var(--high);margin-right:4px}
+  .q-hint{color:var(--ink2);font-size:13px;margin:0 0 10px}
+  .rec{
+    margin:0 0 10px;font-size:13px;color:#065f46;
+    background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:8px 10px;
+  }
+  .rec-btn{
+    display:inline-block;margin-left:6px;color:var(--accent);font-weight:700;
+    cursor:pointer;text-decoration:underline;-webkit-tap-highlight-color:transparent;
+  }
+  .pills{display:flex;flex-wrap:wrap;gap:8px}
+  .pill{
+    border:1.5px solid var(--line); background:#fafafa; color:var(--ink);
+    border-radius:11px; padding:9px 13px; font-size:15px; cursor:pointer;
+    min-height:44px; display:inline-flex; align-items:center;
+    -webkit-tap-highlight-color:transparent; user-select:none;
+    transition:all .12s;
+  }
+  .pill:active{transform:scale(.97)}
+  .pill.sel{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+  .pill .ord{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;
+    font-size:12px;margin-right:6px;font-weight:700;
+  }
+  textarea, input[type=text]{
+    width:100%; font-size:16px; padding:10px 12px; margin-top:8px;
+    border:1.5px solid var(--line); border-radius:11px; background:#fafafa;
+    font-family:inherit; color:var(--ink); resize:vertical;
+  }
+  textarea:focus, input:focus{outline:none;border-color:var(--accent)}
+  .bottombar{
+    position:fixed; left:0; right:0; bottom:0; z-index:50;
+    background:var(--card); border-top:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+    display:flex; gap:10px; align-items:center; max-width:680px; margin:0 auto;
+  }
+  .progress-wrap{flex:1;min-width:0}
+  .progress-text{font-size:12px;color:var(--ink2);margin-bottom:4px;font-variant-numeric:tabular-nums}
+  .progress-bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden}
+  .progress-fill{height:100%;background:var(--accent);border-radius:99px;transition:width .25s}
+  .btn{
+    border:none;border-radius:12px;padding:11px 16px;font-size:15px;font-weight:600;
+    cursor:pointer;min-height:44px;-webkit-tap-highlight-color:transparent;
+  }
+  .btn:active{transform:scale(.97)}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-ghost{background:transparent;color:var(--ink2);border:1.5px solid var(--line)}
+  .modal{
+    position:fixed;inset:0;z-index:100;display:none;
+    background:rgba(0,0,0,.5);padding:16px;
+  }
+  .modal.show{display:flex;align-items:flex-end}
+  .modal-box{
+    background:var(--card);border-radius:16px;padding:16px;width:100%;max-width:648px;
+    margin:0 auto;max-height:86vh;display:flex;flex-direction:column;
+  }
+  .modal-box h3{margin:0 0 8px;font-size:17px}
+  .modal-box textarea{
+    flex:1;min-height:200px;font-family:ui-monospace,Menlo,monospace;font-size:13px;
+    background:#f8fafc;margin-top:0;
+  }
+  .modal-actions{display:flex;gap:8px;margin-top:12px}
+  .modal-actions .btn{flex:1}
+  .toast{
+    position:fixed;left:50%;bottom:100px;transform:translateX(-50%) translateY(20px);
+    background:#111827;color:#fff;padding:9px 18px;border-radius:99px;font-size:14px;
+    opacity:0;pointer-events:none;transition:all .25s;z-index:200;white-space:nowrap;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏋️ 健身助手二次开发 · 需求调研</h1>
+  <p>这一轮只做需求澄清：把你的真实使用方式和期望摸清楚，再动代码。问题基于现有功能设计——现有实现（19 个动作、A/B/C 课表、配额与分餐引擎等）不再重复问你。</p>
+  <p class="meta">共 <b id="totalQ">-</b> 题 · 约 15-20 分钟 · 答案自动保存在本机 · 🔥 = 高优先级，尽量都答 · 填完点底部「导出结果」把文本发给 AI</p>
+</header>
+<main id="app"></main>
+
+<div class="bottombar">
+  <div class="progress-wrap">
+    <div class="progress-text"><span id="progPct">0%</span> · <span id="progNum">0/0</span> 题 · 🔥 <span id="progHigh">0/0</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="progFill" style="width:0%"></div></div>
+  </div>
+  <button class="btn btn-primary" id="btnExport">导出结果</button>
+</div>
+
+<div class="modal" id="exportModal">
+  <div class="modal-box">
+    <h3>导出结果</h3>
+    <p style="margin:0 0 8px;color:var(--ink2);font-size:13px">点「复制到剪贴板」后直接粘贴给 AI；若复制失败（部分手机浏览器限制），长按下方文本框全选手动复制，或点「下载 txt」。</p>
+    <textarea id="exportText" readonly spellcheck="false"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="btnCopy">复制</button>
+      <button class="btn btn-ghost" id="btnDownload">下载 txt</button>
+      <button class="btn btn-ghost" id="btnClose">关闭</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ---------- 问卷数据（MECE：每题只问一件事；已知实现事实写进提示，不问机器能查到的） ---------- */
+var MODULE_NAMES = ["1 体重管理页","2 碳蛋脂目标页","3 菜谱交互重构","4 健身训练系统","5 基础数据（动作库/组合/计划）","6 轻断食+围度","7 Apple Watch"];
+
+var SECTIONS = [
+{ id:"s0", icon:"👤", title:"使用者与设备画像", desc:"先搞清楚你在什么设备、什么场景下用，这决定所有交互设计和 Apple Watch 路线。", questions:[
+  { id:"q011", high:true, type:"radio", label:"主要用哪台设备/浏览器打开健身助手？", hint:"影响：PWA 能力（推送、添加到主屏）、Apple Watch 可行性判断。", options:["iPhone · Safari","iPhone · 微信/钉钉内置浏览器打开","iPhone · 其他浏览器","Android 手机","手机为主 + 电脑偶尔用","其他（请补充）"] },
+  { id:"q012", type:"radio", label:"你平时怎么用它？选出最贴近的一句", hint:"", options:["每天多次，随手记录","主要做饭前查该吃多少","主要训练时记录组次","每周固定复盘一次","不固定，想起来才开"] },
+  { id:"q013", high:true, type:"radio", label:"已有的数据（体重、饮食、训练记录）怎么处理？", hint:"决定数据表改动是「兼容迁移」还是「重建」。", options:["全部保留，无缝迁移","只保核心（体重、训练记录）","可以全新开始","保留数据但允许重新归类整理"] }
+]},
+{ id:"s1", icon:"🧭", title:"导航与信息架构", desc:"现有底部 5 个 Tab（今日/配方/做饭/记录/设置）。7 个新模块塞进去后导航怎么摆，是所有页面的地基。", questions:[
+  { id:"q111", high:true, type:"radio", label:"导航结构怎么改？", hint:"A/B/C 是常见三解；选 D 我出方案对比图给你挑。", options:["A · 底部 Tab 扩到 6~7 个，全平铺","B · 保持 5 Tab，新模块作为二级页面挂进去","C · 重构信息架构：首页仪表盘 + 按主题分区","D · 听建议，出两三个方案对比"] },
+  { id:"q112", type:"radio", label:"打开 App 第一眼，最想看到什么？", hint:"决定首页/默认 Tab 的内容。", options:["今天吃什么（今日页）","今天练什么","体重与目标进度","综合仪表盘：饮食+训练+体重一屏看完"] },
+  { id:"q113", high:true, type:"multi+text", label:"手机上现有哪些操作让你不爽？可多选，有具体场景更好", hint:"这是「交互生硬」的定位题，具体场景价值最大。", options:["点按目标太小，经常点错","层级太深，去个地方要点好几下","数字输入麻烦（弹不出好键盘）","保存/生成没有反馈，不知道成没成","列表太长，滚动查找费劲","没有特别不爽的（有则文字举例）"] }
+]},
+{ id:"s2", icon:"⚖️", title:"体重管理记录页", desc:"现在体重记录藏在「记录」页里。独立成页后，除了记体重还承担什么，需要定义清楚。", questions:[
+  { id:"q211", high:true, type:"multi", label:"体重页要放哪些身体数据？", hint:"多选；「只要体重」也请勾上以示确认。", options:["只要体重，其他都不要","体脂率","腰围","其他围度（与围度模块合并放这）","静息心率","体重照片对比"] },
+  { id:"q212", high:true, type:"radio", label:"记一次体重，理想的操作是什么？", hint:"体验好的体重 app 通常一步完成。", options:["打开页面直接弹输入框","点悬浮大按钮 + 记","语音/Siri 快捷指令记","在 AppleWatch 上记","不用主动记，每天定时提醒我"] },
+  { id:"q213", type:"radio", label:"一天记几次体重？", hint:"现有 weights 表是「一天一条」；一天多次要改表。", options:["一天一次（后值覆盖前值）","一天多次全部保留，看当天波动","以晨起空腹为主，偶尔补记"] },
+  { id:"q214", type:"multi", label:"体重曲线想怎么看？", hint:"多选；勾选越多实现越重，按真实需要勾。", options:["近 7 天","近 30 天","近 90 天","全部 + 7 日均线","目标体重虚线","每降 5kg 重算配额的节点标记"] },
+  { id:"q215", type:"radio", label:"减脂进度（当前 vs 目标）要不要显著展示？", hint:"", options:["要，大进度条+百分比","要，但低调（曲线里一条目标线即可）","不要，纯记录工具"] },
+  { id:"q216", type:"radio", label:"「每降 5kg 重算配额」「停止减脂信号」这类提醒放哪？", hint:"这两条提醒目前挂在今日页。", options:["搬去体重页为主，今日页留轻提示","保持今日页不变","两边都要","听建议"] },
+  { id:"q217", type:"radio", label:"围度测量（腰/臂/腿等）放哪里？", hint:"与第 7 模块相关，这里定归属。", options:["体重页内做子 Tab（体重/围度切换）","独立页面","与轻断食合并成一个「身体」页","听建议"] }
+]},
+{ id:"s3", icon:"🎯", title:"碳蛋脂目标摄入页", desc:"现有引擎已能按训练日/休息日+训练时段算出全天碳蛋脂并拆到每餐。这个新页面要回答：目标值以什么形态呈现、和谁联动。", questions:[
+  { id:"q311", high:true, type:"radio", label:"这个页面和现有「配方」页是什么关系？", hint:"目标值与菜谱计算天然耦合，先定关系再动页面。", options:["替代配方页顶部的目标展示，配方页专注算菜","独立新页，配方页不动","合并成一页：上半目标、下半配方","听建议"] },
+  { id:"q312", high:true, type:"radio", label:"早力训/中力训/晚力训/休息日 四种日型的切换入口？", hint:"", options:["页面顶部四个大按钮常驻可切","自动按当天训练记录推断，允许手动改","周历视图：按天看和设","听建议"] },
+  { id:"q313", high:true, type:"radio", label:"现在底层有 7 种训练时段（早/午/晚餐前后、夜训），和你说的 4 种日型什么关系？", hint:"7 槽决定碳水怎么拆到每餐；4 日型是你想要的入口叫法。", options:["以 4 类为准简化掉 7 槽，重做分餐比例","4 类只是入口，底层保留 7 槽可细分","先做 4 类，以后真需要再加细分","听建议"] },
+  { id:"q314", type:"radio", label:"目标值展示到什么粒度？", hint:"", options:["只要全天碳蛋脂总量","全天 + 可展开看每餐明细","直接按餐展示（默认展开每餐）"] },
+  { id:"q315", type:"radio", label:"休息日的目标逻辑？", hint:"现有休息日碳水按 30/30/30/10 拆。", options:["休息日自动降碳水、提脂肪（沿用现有）","休息日总热量也要降","比例我自己定，页面给微调入口","听建议"] },
+  { id:"q316", high:true, type:"radio", label:"这个页面的目标值要不要作为「做饭/配方」计算的输入源？", hint:"必须联动则菜谱按当日目标自动配平；不联动则两边独立。", options:["必须联动，菜谱按当日目标算","不联动，各自独立用","联动，但可以一键暂时关掉"] },
+  { id:"q317", type:"radio", label:"「练后餐拿大头碳水（约 40%）」的比例要不要可调？", hint:"现在是固定规则自动算。", options:["固定自动就好，不想调","要，可拖动微调并记住我的偏好","放进高级设置藏起来调"] },
+  { id:"q318", type:"multi", label:"这个页面还想要什么？", hint:"多选，可不选。", options:["目标 vs 实际已吃的差额条","与当日饮食打卡联动","食物碳蛋脂速查小抄","历史目标回顾（我上周都是什么目标）","其他（文字补充）"] }
+]},
+{ id:"s4", icon:"🍳", title:"菜谱页交互重构", desc:"配方计算逻辑（按配额生成菜谱、按餐锁定）你觉得「还不错」，要动的是交互。这里要把「生硬」拆成可执行的问题清单。", questions:[
+  { id:"q411", high:true, type:"multi+text", label:"「交互生硬」具体指什么？尽量举一个真实场景（比如：我想加一份鸡胸肉，结果要点了 5 下还没找到）", hint:"这是本模块最重要的一题，你的场景描述直接决定改造方案。", options:["按钮太小难点中","步骤层级太多","数字输入麻烦","加菜/删菜太繁琐","页面跳转发晕，找不到回退","生成/保存没有进度或结果反馈","术语看不懂（配额/置换/锁定等）","其他（务必文字举例）"] },
+  { id:"q412", high:true, type:"radio", label:"「给今天午饭加一份鸡胸肉」，理想上几步完成？", hint:"对标：外卖 app 改数量是一步。", options:["1 步：页内搜索，点一下就加","2 步：进食库筛选后加","保持现有流程，只优化手感"] },
+  { id:"q413", type:"radio", label:"配方页现在的信息密度？", hint:"", options:["正好","太多，看不过来","太少——想一屏看到碳蛋脂还差多少","听建议重新排版"] },
+  { id:"q414", high:true, type:"radio", label:"菜谱生成逻辑（按餐锁定+按配额算菜）动不动？", hint:"你说「当前功能还不错」，默认理解为逻辑不动。", options:["逻辑不动，只换交互外壳","逻辑也要改（文字说明哪里不对）","不确定，看到新交互再说"] },
+  { id:"q415", type:"radio", label:"调整食材数量的交互偏好？", hint:"", options:["+/- 步进按钮","滑杆拖动","直接数字键盘输入","+/- 为主，长按连调","听建议"] },
+  { id:"q416", type:"radio", label:"「做饭」页（一锅多餐）要不要一起改？", hint:"", options:["一起改，风格统一","菜谱页先改，做饭页下一轮","做饭页单独一轮再说"] },
+  { id:"q417", type:"radio", label:"视觉风格期望？", hint:"", options:["大字大按钮，力量风","清爽信息卡片风","保持现状风格，只优化布局","出两版对比我挑"] },
+  { id:"q418", type:"multi", label:"哪些手感细节值得做？", hint:"多选；也表达「都不重要，快就行」。", options:["震动反馈（点按/完成）","过渡动画","数字滚动动画","深色模式","都不重要，响应快就行"] },
+  { id:"q419", type:"radio", label:"桌面端要不要兼顾？", hint:"", options:["只做手机","手机优先，桌面能看就行","手机桌面并重"] }
+]},
+{ id:"s5", icon:"💪", title:"健身训练系统", desc:"现在已有：19 个动作、A/B/C 全身轮换课表、组次/重量/RIR 记录、回归期阶梯。你要的「类似 fitness 全套」要在此之上扩多大、往哪个方向扩。", questions:[
+  { id:"q511", high:true, type:"radio+text", label:"「类似 fitness 全套」对标哪类 app？", hint:"不同方向的工作量差一个数量级，选完可在补充框写具体 app 名。", options:["Keep 类：视频跟练为主","Strong/Gymverse 类：训练日志+计划为主","Apple Fitness+ 类：课程订阅内容","自定义（文字描述你心里的样子）"] },
+  { id:"q512", high:true, type:"radio", label:"计划形态往哪个方向扩？", hint:"现有是 A/B/C 三套全身轮换。", options:["仍是全身轮换，但动作更多","推/拉/腿 等分化训练","多套并存可切换（全身+分化）","完全自定义排课"] },
+  { id:"q513", high:true, type:"radio", label:"动作库期望规模？", hint:"规模决定素材抓取、分类与筛选的工作量。", options:["精简，30 个以内核心动作","30~50 个，按部位分类","50~100 个，带部位+器械双标签","越全越好，不怕多"] },
+  { id:"q514", type:"radio", label:"新增动作的示范素材来源？", hint:"现有 19 组 GIF 是脚本抓取的，再抓需要新的图源。", options:["继续联网抓取 GIF","自己拍/录 GIF","文字要点+肌肉示意图就够","不需要示范"] },
+  { id:"q515", type:"radio", label:"要不要周计划铺排视图？", hint:"现有是「练完自动推下一个」无日历。", options:["要，周历视图排 A/B/C+休息日","不要，沿用自动轮换","只要「今天该练什么」"] },
+  { id:"q516", high:true, type:"radio", label:"训练中记一组，理想几次点击？", hint:"组间通常只有 60~90 秒，这是训练类 app 的核心体验。", options:["1 次：默认推荐重量和次数，直接确认","2 次：调次数再确认","3 次以上也能接受"] },
+  { id:"q517", type:"radio", label:"组间休息倒计时？", hint:"", options:["要，时长可配置","要，固定 90 秒就好","不要"] },
+  { id:"q518", type:"multi", label:"训练时你真实会填哪些字段？", hint:"现有支持：次数、重量、RIR、力竭标记、负重类型。只保留你会用的，界面才清爽。", options:["次数 reps（必）","重量 weight（必）","RIR 留几次","力竭标记","负重类型标签","只记次数+重量，其他不要"] },
+  { id:"q519", type:"radio", label:"训练记录丢过数据吗（锁屏/切后台后回来）？", hint:"现有离线队列机制已处理大部分场景，确认是否还有丢失。", options:["没丢过","丢过（文字描述当时操作）","没注意过"] }
+]},
+{ id:"s6", icon:"🗃️", title:"基础数据：动作库 / 组合 / 计划生成", desc:"训练系统的地基。现有 A/B/C 组合是写死在代码里的，动作库 19 条。这里决定它们变成「可管理的数据」还是保持「代码维护」。", questions:[
+  { id:"q611", high:true, type:"radio", label:"动作组合（A/B/C 课表）要变成页面可管理吗？", hint:"", options:["要，页面上能增删改组合","保持代码里维护就行（你告诉我怎么改）","要，且支持我自己排列组合动作"] },
+  { id:"q612", type:"radio", label:"要「自动生成一周计划」吗？", hint:"例如：输入目标（减脂/增肌）+每周练几天，自动排一周课表。", options:["要，输入目标+天数自动排","不要，手动排就好","以后再说"] },
+  { id:"q613", high:true, type:"multi+text", label:"家里有哪些器械？（多选；规格写补充框，比如哑铃最大 20kg×2）", hint:"器械清单直接决定动作库的边界——没有的器械不收对应动作。", options:["可调哑铃","固定哑铃若干","卧推凳/ adjustable 凳","弹力带","壶铃","引体向上杆","其他（文字写规格）"] },
+  { id:"q614", type:"radio", label:"动作库数据放哪？", hint:"进 SQLite 可随备份导出；静态 JSON 改动要发版。", options:["进 SQLite，和食材一样可增删改+备份","前端静态 JSON，稳定少改","听建议"] },
+  { id:"q615", type:"radio", label:"要不要建「身体档案」（禁忌动作、偏好）？", hint:"比如腰不好排除硬拉变式，排课时自动避开。", options:["要，记录禁忌动作","要，记录动作偏好","不需要","有禁忌要记（文字写明）"] }
+]},
+{ id:"s7", icon:"⏳", title:"轻断食小组件与围度记录", desc:"两个新能力，规模不大但要定形态。", questions:[
+  { id:"q711", high:true, type:"radio", label:"轻断食目标模式？", hint:"", options:["16:8 日常","18:6","5:2（每周两天轻断）","自定义窗口","只记录进食时间，不设目标"] },
+  { id:"q712", type:"multi", label:"断食计时入口放哪？", hint:"多选。", options:["今日页一个小卡片","独立页面","AppleWatch 上一键开始/结束"] },
+  { id:"q713", type:"radio", label:"断食到点提醒？", hint:"浏览器推送需要 PWA + 通知授权。", options:["系统推送提醒","页面内提示就行","不要提醒"] },
+  { id:"q714", type:"multi", label:"围度要记哪些部位？", hint:"多选。", options:["腰围","臀围","大臂（左右）","大腿（左右）","胸围","小腿","颈围"] },
+  { id:"q715", type:"radio", label:"围度测量频率？", hint:"", options:["每周固定日（可提醒）","每两周一次","随缘，想测就测"] },
+  { id:"q716", type:"multi", label:"围度数据用来做什么？", hint:"腰围阈值（男>85/女>80 停止减脂）已在系统内置。", options:["只记录看趋势","参与停止减脂判断（现有阈值）","估算体脂率","其他"] },
+  { id:"q717", type:"radio", label:"你现在怎么计断食？", hint:"了解替代品才好设计差异点。", options:["手机自带工具","其他 App（写名字）","没用过，想开始","用过但弃了（文字说为什么）"] }
+]},
+{ id:"s8", icon:"⌚", title:"Apple Watch 连接", desc:"手表 App 需要 Mac+Xcode 编译，上架需付费开发者账号（$99/年）。这组题决定走原生、走通知、还是先评估。", questions:[
+  { id:"q811", high:true, type:"radio", label:"你的 Apple Watch 情况？", hint:"", options:["有新款（S7 之后 / Ultra）","有老款","没有，打算买","不打算买"] },
+  { id:"q812", high:true, type:"radio", label:"手上有 Mac + Xcode 开发环境吗？", hint:"自研手表 App 硬性前提：Mac 编译；上架另需 $99/年 开发者账号，自签需 7 天重装。", options:["有 Mac 且装过 Xcode","有 Mac 没装过 Xcode","没有 Mac，但可以搞到","完全没有，也不打算搞"] },
+  { id:"q813", type:"multi", label:"期望在手表上做什么？", hint:"多选。", options:["看当前动作 + 记一组","组间倒计时","实时心率","断食计时开始/结束","震动提示（该组间结束了）","都不需要"] },
+  { id:"q814", type:"multi", label:"期望把哪些手表/健康数据同步进来？", hint:"多选。", options:["心率","步数","活动热量","睡眠","手表「体能训练」记录导入","都不需要"] },
+  { id:"q815", type:"radio", label:"接受的方案形态？", hint:"", options:["原生 watch App（接受 Mac+账号代价）","手机 PWA + 手表只收通知推送","先出可行性评估报告再定","听建议"] },
+  { id:"q816", type:"radio", label:"iPhone 上「健康」App 的使用现状？", hint:"重度使用则对接 HealthKit 价值大。", options:["重度使用，天天看","装了偶尔看","基本不用"] },
+  { id:"q817", type:"multi", label:"如果原生手表 App 不可行（没有 Mac/账号），接受什么替代？", hint:"多选。", options:["手机 PWA + 蓝牙心率带显示心率","只做手表通知推送（需 PWA）","暂缓这个需求","其他"] }
+]},
+{ id:"s9", icon:"🏁", title:"优先级、节奏与验收", desc:"最后一个问题清单：定顺序、定节奏、定验收标准。", questions:[
+  { id:"q911", high:true, type:"rank3", label:"最重要的 3 个模块，按重要性顺序点选（①②③）", hint:"再点一次已选的可以取消。", options:MODULE_NAMES },
+  { id:"q912", high:true, type:"radio", label:"推进节奏？", hint:"", options:["一次全做完再给我用","每完成一个模块我就试用、提意见","先做最小可用组合，再逐步迭代"] },
+  { id:"q913", type:"radio", label:"现有页面的重构接受度？", hint:"", options:["可以大改，体验优先","尽量兼容旧使用习惯","只加不改，旧功能别动"] },
+  { id:"q914", type:"multi", label:"每个模块做完，怎么算「过关」？", hint:"多选，定验收标准。", options:["我能顺利跑通主流程","verify 断言全过（自动化回归）","手机实测一周无卡点","数据备份完整、可回滚"] },
+  { id:"q915", type:"text", label:"还有没有我没问到、但你想要的需求或约束？", hint:"开放题，没有可以不填。", options:[] }
+]}
+];
+
+/* ---------- 推荐答案（grill 风格：每题给建议，用户可采纳可推翻） ----------
+   REC 值 = 选项原文（多选题为数组）；REC_NOTE = 补充理由，只展示不写入答案 */
+var REC = {
+  q011:"iPhone · Safari", q012:"每天多次，随手记录", q013:"全部保留，无缝迁移",
+  q111:"B · 保持 5 Tab，新模块作为二级页面挂进去",
+  q112:"综合仪表盘：饮食+训练+体重一屏看完",
+  q211:["体脂率","腰围"],
+  q212:"点悬浮大按钮 + 记",
+  q213:"一天一次（后值覆盖前值）",
+  q214:["近 30 天","全部 + 7 日均线","目标体重虚线"],
+  q215:"要，但低调（曲线里一条目标线即可）",
+  q216:"搬去体重页为主，今日页留轻提示",
+  q217:"体重页内做子 Tab（体重/围度切换）",
+  q311:"独立新页，配方页不动",
+  q312:"自动按当天训练记录推断，允许手动改",
+  q313:"4 类只是入口，底层保留 7 槽可细分",
+  q314:"全天 + 可展开看每餐明细",
+  q315:"休息日自动降碳水、提脂肪（沿用现有）",
+  q316:"必须联动，菜谱按当日目标算",
+  q317:"放进高级设置藏起来调",
+  q318:["目标 vs 实际已吃的差额条"],
+  q412:"1 步：页内搜索，点一下就加",
+  q413:"听建议重新排版",
+  q414:"逻辑不动，只换交互外壳",
+  q415:"+/- 步进按钮",
+  q416:"菜谱页先改，做饭页下一轮",
+  q417:"大字大按钮，力量风",
+  q419:"手机优先，桌面能看就行",
+  q511:"Strong/Gymverse 类：训练日志+计划为主",
+  q512:"多套并存可切换（全身+分化）",
+  q513:"30~50 个，按部位分类",
+  q514:"继续联网抓取 GIF",
+  q515:"只要「今天该练什么」",
+  q516:"1 次：默认推荐重量和次数，直接确认",
+  q517:"要，时长可配置",
+  q518:["次数 reps（必）","重量 weight（必）","RIR 留几次"],
+  q611:"要，且支持自己排列组合动作",
+  q612:"以后再说",
+  q614:"进 SQLite，和食材一样可增删改+备份",
+  q615:"有禁忌要记（文字写明）",
+  q711:"16:8 日常",
+  q712:["今日页一个小卡片"],
+  q713:"页面内提示就行",
+  q714:["腰围","臀围","大臂（左右）","大腿（左右）"],
+  q715:"每周固定日（可提醒）",
+  q716:["只记录看趋势"],
+  q813:["看当前动作 + 记一组","组间倒计时"],
+  q814:["心率"],
+  q815:"先出可行性评估报告再定",
+  q817:"手机 PWA + 手表只收通知推送",
+  q912:"每完成一个模块我就试用、提意见",
+  q913:"可以大改，体验优先",
+  q914:["verify 断言全过（自动化回归）","手机实测一周无卡点"]
+};
+var REC_NOTE = {
+  q111:"底部超过 6 个 Tab 在手机上点不准",
+  q211:"体重默认就有；腰围参与停止减脂判断",
+  q212:"语音/Siri 以后可以再加",
+  q213:"与现有表结构一致，改表成本最低",
+  q311:"配方页顶部的目标展示改成指向新页",
+  q415:"点数字可另支持直接键盘输入",
+  q417:"手机单手操作友好",
+  q511:"最贴合现有记录体系",
+  q518:"RIR 参与回归期阶梯判断，建议保留",
+  q615:"没有禁忌就不建",
+  q713:"系统推送需 PWA+通知授权，成本高",
+  q716:"停止减脂判断系统已自动做，无需重复开关",
+  q911:"这三个没有标准答案，按你自己的真实想法排"
+};
+
+/* ---------- 状态 ---------- */
+var LS_KEY = "jsas_survey_v1";
+var answers = {};        // { qid: { choice:[], text:"" } }
+var openSections = {};   // { secId: true/false }
+try { answers = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e) { answers = {}; }
+
+function saveState(){
+  try { localStorage.setItem(LS_KEY, JSON.stringify(answers)); } catch(e){}
+}
+function allQuestions(){
+  var list = [];
+  SECTIONS.forEach(function(s){ s.questions.forEach(function(q){ list.push(q); }); });
+  return list;
+}
+function getAns(qid){
+  if(!answers[qid]) answers[qid] = { choice:[], text:"" };
+  return answers[qid];
+}
+function isAnswered(q){
+  var a = getAns(q.id);
+  if(q.type === "text") return !!(a.text && a.text.trim());
+  return a.choice.length > 0;
+}
+
+/* ---------- 渲染 ---------- */
+var app = document.getElementById("app");
+function esc(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function render(){
+  var html = [];
+  var all = allQuestions();
+  document.getElementById("totalQ").textContent = all.length;
+  SECTIONS.forEach(function(s, si){
+    var done = s.questions.filter(isAnswered).length;
+    var open = openSections[s.id] !== undefined ? openSections[s.id] : (si === 0);
+    html.push('<details class="card" data-sec="'+s.id+'"'+(open?" open":"")+'>');
+    html.push('<summary><span class="chev">▶</span><span class="t"><b>'+s.icon+" "+s.title+'</b><small>'+s.desc+'</small></span>');
+    html.push('<span class="badge'+(done===s.questions.length?" done":"")+'">'+done+"/"+s.questions.length+'</span></summary>');
+    s.questions.forEach(function(q){
+      html.push(renderQuestion(q, s));
+    });
+    html.push('</details>');
+  });
+  app.innerHTML = html.join("");
+  updateProgress();
+}
+function renderQuestion(q, sec){
+  var a = getAns(q.id);
+  var h = '<div class="q" data-q="'+q.id+'">';
+  h += '<div class="q-label">'+(q.high?'<span class="fire">🔥</span>':"")+esc(q.label)+'</div>';
+  if(q.hint) h += '<p class="q-hint">💡 '+esc(q.hint)+'</p>';
+  if(REC[q.id]){
+    var recArr = Array.isArray(REC[q.id]) ? REC[q.id] : [REC[q.id]];
+    var recText = recArr.join(" + ") + (REC_NOTE[q.id] ? "（"+REC_NOTE[q.id]+"）" : "");
+    h += '<div class="rec">➡️ 建议：'+esc(recText)+'<span class="rec-btn" data-rec="'+q.id+'">采纳</span></div>';
+  }
+  if(q.options.length){
+    h += '<div class="pills">';
+    q.options.forEach(function(opt, oi){
+      var sel = a.choice.indexOf(opt) >= 0;
+      var ordMark = "";
+      if(q.type === "rank3" && sel){
+        ordMark = '<span class="ord">'+(a.choice.indexOf(opt)+1)+'</span>';
+      }
+      h += '<span class="pill'+(sel?" sel":"")+'" data-qi="'+oi+'">'+ordMark+esc(opt)+'</span>';
+    });
+    h += '</div>';
+  }
+  if(q.type === "text" || q.type === "multi+text" || q.type === "radio+text"){
+    h += '<textarea rows="'+(q.type==="text"?3:2)+'" placeholder="补充说明（可空）" data-text="'+q.id+'">'+esc(a.text||"")+'</textarea>';
+  }
+  h += '</div>';
+  return h;
+}
+
+/* ---------- 交互 ---------- */
+app.addEventListener("click", function(ev){
+  var recBtn = ev.target.closest(".rec-btn");
+  if(recBtn){
+    var rqid = recBtn.getAttribute("data-rec");
+    getAns(rqid).choice = Array.isArray(REC[rqid]) ? REC[rqid].slice() : [REC[rqid]];
+    saveState();
+    refreshQuestion(rqid);
+    updateProgress();
+    return;
+  }
+  var pill = ev.target.closest(".pill");
+  if(pill){
+    var qDiv = pill.closest(".q");
+    var qid = qDiv.getAttribute("data-q");
+    var q = findQ(qid);
+    var opt = q.options[parseInt(pill.getAttribute("data-qi"), 10)];
+    var a = getAns(qid);
+    if(q.type === "radio" || q.type === "radio+text"){
+      a.choice = (a.choice[0] === opt) ? [] : [opt];
+    } else if(q.type === "multi" || q.type === "multi+text"){
+      var i = a.choice.indexOf(opt);
+      if(i >= 0) a.choice.splice(i, 1); else a.choice.push(opt);
+    } else if(q.type === "rank3"){
+      var j = a.choice.indexOf(opt);
+      if(j >= 0) a.choice.splice(j, 1);
+      else if(a.choice.length < 3) a.choice.push(opt);
+    }
+    saveState();
+    refreshQuestion(qid);
+    updateProgress();
+    return;
+  }
+  var summary = ev.target.closest("summary");
+  if(summary){
+    var card = summary.closest(".card");
+    var sid = card.getAttribute("data-sec");
+    // details 状态在 click 后才翻转，延时记录
+    setTimeout(function(){ openSections[sid] = card.hasAttribute("open"); saveState(); }, 0);
+  }
+});
+app.addEventListener("input", function(ev){
+  var ta = ev.target.closest("textarea");
+  if(ta){
+    var qid = ta.getAttribute("data-text");
+    getAns(qid).text = ta.value;
+    saveState();
+    updateProgress();
+  }
+});
+function findQ(qid){
+  var found = null;
+  SECTIONS.forEach(function(s){ s.questions.forEach(function(q){ if(q.id === qid) found = q; }); });
+  return found;
+}
+function refreshQuestion(qid){
+  var sec = null;
+  SECTIONS.forEach(function(s){ if(s.questions.some(function(q){ return q.id===qid; })) sec = s; });
+  var q = findQ(qid);
+  var div = app.querySelector('.q[data-q="'+qid+'"]');
+  if(div){ div.outerHTML = renderQuestion(q, sec); }
+  var card = app.querySelector('.card[data-sec="'+sec.id+'"]');
+  if(card){
+    var badge = card.querySelector(".badge");
+    var done = sec.questions.filter(isAnswered).length;
+    badge.textContent = done+"/"+sec.questions.length;
+    badge.className = "badge" + (done===sec.questions.length ? " done" : "");
+  }
+}
+function updateProgress(){
+  var all = allQuestions();
+  var done = all.filter(isAnswered).length;
+  var highAll = all.filter(function(q){ return q.high; });
+  var highDone = highAll.filter(isAnswered).length;
+  document.getElementById("progPct").textContent = Math.round(done/all.length*100)+"%";
+  document.getElementById("progNum").textContent = done+"/"+all.length;
+  document.getElementById("progHigh").textContent = highDone+"/"+highAll.length;
+  document.getElementById("progFill").style.width = Math.round(done/all.length*100)+"%";
+}
+
+/* ---------- 导出 ---------- */
+var MODAL = document.getElementById("exportModal");
+var toast = document.getElementById("toast");
+function showToast(msg){
+  toast.textContent = msg;
+  toast.classList.add("show");
+  setTimeout(function(){ toast.classList.remove("show"); }, 1800);
+}
+document.getElementById("btnExport").addEventListener("click", function(){
+  document.getElementById("exportText").value = buildExport();
+  MODAL.classList.add("show");
+});
+document.getElementById("btnClose").addEventListener("click", function(){ MODAL.classList.remove("show"); });
+document.getElementById("btnCopy").addEventListener("click", function(){
+  var text = document.getElementById("exportText").value;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){ showToast("✅ 已复制"); }, function(){ showToast("❌ 复制被拒绝，请长按文本手动全选复制"); });
+  } else {
+    var ta = document.getElementById("exportText");
+    ta.removeAttribute("readonly");
+    ta.select();
+    try { document.execCommand("copy"); showToast("✅ 已复制"); }
+    catch(e){ showToast("请长按文本手动全选复制"); }
+    ta.setAttribute("readonly","readonly");
+  }
+});
+document.getElementById("btnDownload").addEventListener("click", function(){
+  var text = document.getElementById("exportText").value;
+  var blob = new Blob([text], { type:"text/plain;charset=utf-8" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "健身助手需求调研-作答.txt";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+  showToast("已开始下载");
+});
+var CN_NUM = ["一","二","三","四","五","六","七","八","九","十"];
+function buildExport(){
+  var all = allQuestions();
+  var lines = [];
+  var now = new Date();
+  var pad = function(n){ return (n<10?"0":"")+n; };
+  var stamp = now.getFullYear()+"-"+pad(now.getMonth()+1)+"-"+pad(now.getDate())+" "+pad(now.getHours())+":"+pad(now.getMinutes());
+  lines.push("健身助手二次开发 · 需求澄清问卷 v1（作答结果）");
+  lines.push("导出时间："+stamp);
+  var done = all.filter(isAnswered).length;
+  lines.push("作答进度："+done+"/"+all.length);
+  var missHigh = all.filter(function(q){ return q.high && !isAnswered(q); });
+  if(missHigh.length){
+    lines.push("");
+    lines.push("【未答的高优先级题，建议补答】");
+    missHigh.forEach(function(q){ lines.push("- "+q.label); });
+  }
+  lines.push("");
+  lines.push("━━━━━━━━━━━━━━━━━━━━");
+  SECTIONS.forEach(function(s, si){
+    lines.push("");
+    lines.push("【"+(CN_NUM[si]||si+1)+" "+s.title+"】");
+    var no = 0;
+    s.questions.forEach(function(q){
+      no++;
+      var a = getAns(q.id);
+      var answered = isAnswered(q);
+      lines.push("");
+      var prefix = (q.high ? "🔥" : "") + (answered ? "" : "〔未答〕");
+      lines.push(prefix+"Q"+(si+1)+"."+no+" "+q.label);
+      if(a.choice.length){
+        if(q.type === "rank3"){
+          lines.push("  排序：" + a.choice.map(function(c, i){ return ["①","②","③"][i]+" "+c; }).join("  →  "));
+        } else {
+          lines.push("  答："+a.choice.join("；"));
+        }
+        if(q.type !== "rank3" && REC[q.id] && a.choice.length === 1){
+          var recIsArr = Array.isArray(REC[q.id]);
+          var recStr = recIsArr ? REC[q.id].join("、") : REC[q.id];
+          if(a.choice[0] !== recStr && !(recIsArr && REC[q.id].length===1 && REC[q.id][0]===a.choice[0])){
+            lines.push("  （AI 原建议："+recStr+(REC_NOTE[q.id] ? "——"+REC_NOTE[q.id] : "")+"）");
+          }
+        }
+      }
+      if(a.text && a.text.trim()){
+        lines.push("  补充："+a.text.trim().replace(/\n+/g, " / "));
+      }
+    });
+  });
+  return lines.join("\n");
+}
+
+/* ---------- 启动 ---------- */
+try {
+  openSections = JSON.parse(localStorage.getItem(LS_KEY+"_sections") || "{}");
+} catch(e){ openSections = {}; }
+var _origSave = saveState;
+saveState = function(){
+  _origSave();
+  try { localStorage.setItem(LS_KEY+"_sections", JSON.stringify(openSections)); } catch(e){}
+};
+render();
+</script>
+</body>
+</html>

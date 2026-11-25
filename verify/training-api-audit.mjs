@@ -6,7 +6,7 @@
  *   ⑥ 未来日期拒绝：POST date=明天 → 400
  *   ⑦ 日期边界：date 由前端传字符串透传，与容器 UTC 无关
  *   ⑦.5 校验：非法 planKey / exerciseKey / slot / loadTag / 空 sets → 400
- *   ⑨ 备份（7.9）：导出含 workout_logs / workout_sets / schema_version=3，导入往返数据逐字段一致
+ *   ⑨ 备份（7.9）：导出含 workout_logs / workout_sets / schema_version=4（07 升级五新表），导入往返数据逐字段一致
  *
  * 运行（在项目根目录下）：
  *   node verify/training-api-audit.mjs
@@ -199,7 +199,7 @@ async function auditBackupRoundtrip() {
   }
   await seedWorkout(aWorkout);
   const dump = await req('GET', '/backup');
-  checkEqual('备份顶层 schema_version = 3', dump.schema_version, 3);
+  checkEqual('备份顶层 schema_version = 4（07 五新表升级）', dump.schema_version, 4);
   checkEqual('备份含 workout_logs', dump.workout_logs.length, 1);
   checkEqual('备份含 workout_sets（3 组）', dump.workout_sets.length, 3);
   checkEqual('workout_logs 导出 camelCase', dump.workout_logs[0].planKey, 'A');

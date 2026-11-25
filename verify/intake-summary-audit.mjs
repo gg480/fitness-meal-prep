@@ -174,12 +174,13 @@ section('K. 份数守恒行只统计计划端事件（源码级）', () => {
 });
 
 section('L. 记录页 groupPots 过滤实际端事件（源码级）', () => {
-  const s = src('frontend/src/views/LogView.vue');
+  /* 10 归并：记录页 LogView 已删，groupPots 迁入 TodayView（每日饮食回溯区），语义未变 */
+  const s = src('frontend/src/views/TodayView.vue');
   const at = s.indexOf('function groupPots');
-  assert.ok(at > 0, 'LogView 应存在 groupPots');
+  assert.ok(at > 0, 'TodayView 应存在 groupPots');
   const body = s.slice(at, s.indexOf('\n}', at));
-  assert.ok(/filter\(\s*e\s*=>\s*!e\.kind\s*\)/.test(body),
-    'groupPots 必须过滤带 kind 的实际端事件——portion/outing 无 batchName，会聚成「未命名锅×N」幻影');
+  assert.ok(/if\s*\(\s*!e\s*\|\|\s*e\.kind\s*\)\s*continue;/.test(body),
+    'groupPots 必须跳过带 kind 的实际端事件——portion/outing 无 batchName，会聚成「未命名锅×N」幻影');
 });
 
 console.log(failed ? `FAIL：${failed} 组断言未通过` : 'PASS：intake-summary 审计全绿');

@@ -87,6 +87,12 @@ export const SETTINGS_FALLBACK = {
   // T-125 每天从锅里盛出几份（1–6 整数，默认 2 = 历史基线）：决定日总量与各餐分包换算，
   // 必须与后端 seed DEFAULT_SETTINGS / db.js ensureSettingsKeys 同口径
   mealsPerDay: 2,
+  // 07 训练系统升级：跟练组间倒计时秒数（30–300，默认 90；设置页训练区可调）。
+  // 三处同步契约：seed.js DEFAULT_SETTINGS / db.js ensureSettingsKeys / 前端 SETTINGS_FALLBACK
+  restSeconds: 90,
+  // 08 轻断食：目标断食时长（小时，12–24，默认 16 = 16:8；设置页可调，断食卡进度分母）。
+  // 三处同步契约：seed.js DEFAULT_SETTINGS / db.js ensureSettingsKeys / 前端 SETTINGS_FALLBACK
+  fastGoalHours: 16,
   // T-126 关闭的餐次（[] = 六餐全开）：关闭后其碳水比例与蛋白脂肪份额按比例归一化给其余餐次，
   // 今日页也不再显示该餐次。元素取值见 MEAL_SLOTS，必须与后端同口径
   mealSlotsOff: [],

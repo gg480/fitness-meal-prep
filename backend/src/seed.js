@@ -343,6 +343,12 @@ export const DEFAULT_SETTINGS = {
   // T-126 上次重算配额时的体重：null = 从未重算，规则引擎的提醒基准退回首条体重记录；
   // 必须与 db.js ensureSettingsKeys / 前端 SETTINGS_FALLBACK 同值
   lastRecalcWeight: null,
+  // 07 组间倒计时（秒）：跟练模式切组后的休息倒计时，30–300 整数；
+  // 必须与 db.js ensureSettingsKeys / 前端 SETTINGS_FALLBACK 同值
+  restSeconds: 90,
+  // 08 轻断食目标时长（小时）：今日页断食卡进度分母，12–24；
+  // 必须与 db.js ensureSettingsKeys / 前端 SETTINGS_FALLBACK 同值
+  fastGoalHours: 16,
   // T-131 一次性迁移标记：calcMode 的默认值已由旧的 'tdee' 改为 'quota'（T-122），
   // 但老库里「用户已保存的值」不会被覆盖（那是刻意设计），于是老库会一直停在 TDEE 派。
   // 默认 false = 尚未迁移；迁移动作见 migrateCalcModeOnce。
@@ -655,5 +661,124 @@ export function migrateCalcModeOnce(db) {
   } catch (err) {
     console.error('[seed] calcMode 一次性迁移失败，仍可能停在旧的 tdee：' + err.message);
     return 0;
+  }
+}
+
+/* ===== 07 训练系统升级：内置动作 / 课表种子迁移 =====
+ * 三张新表（exercises / workout_plans + plan_days + plan_items）的幂等种子：
+ * 前端 training.js 的 EXERCISES / PLANS 是单一事实源，这里镜像一份并在迁移时逐值比对 ——
+ * 与 backfillPresetFromSeed 同哲学：种子归种子、用户改的用户数据不动。
+ *
+ * 归属判定（source）：key 在 19 枚举内 = builtin；否则若是用户在动作库自建的 = custom。
+ * 用户对内置动作的改名/启停（enabled=0 软删）是用户数据，迁移绝不覆盖；
+ * 但 name 是空/脏值的行仍按种子补齐（同 DIRTY_TEXT_RE 哲学：只修我们亲手写坏的）。
+ */
+
+// 19 内置动作的库表元数据：name/group 与前端 EXERCISES 逐值一致；
+// equipment 按问卷边界（可调哑铃 + 卧推凳 + 自重）；category 按 07 详设 §1 枚举
+export const BUILTIN_EXERCISES = [
+  { key: 'goblet_squat',          name: '高脚杯深蹲',       group: '下肢', equipment: 'dumbbell',  category: 'legs' },
+  { key: 'db_bench',              name: '哑铃卧推（凳）',   group: '胸',   equipment: 'bench',     category: 'push' },
+  { key: 'db_row_bench',          name: '凳上支撑单臂划船', group: '背',   equipment: 'bench',     category: 'pull' },
+  { key: 'rdl',                   name: '罗马尼亚硬拉',     group: '后链', equipment: 'dumbbell',  category: 'legs' },
+  { key: 'lateral_raise',         name: '侧平举',           group: '肩',   equipment: 'dumbbell',  category: 'shoulders' },
+  { key: 'dead_bug',              name: '死虫',             group: '核心', equipment: 'bodyweight', category: 'core' },
+  { key: 'bulgarian_split_squat', name: '保加利亚分腿蹲',   group: '下肢', equipment: 'dumbbell',  category: 'legs' },
+  { key: 'half_kneel_press',      name: '半跪哑铃推举',     group: '肩',   equipment: 'dumbbell',  category: 'shoulders' },
+  { key: 'bent_over_row',         name: '俯身划船',         group: '背',   equipment: 'dumbbell',  category: 'pull' },
+  { key: 'single_leg_rdl',        name: '单腿硬拉',         group: '后链', equipment: 'dumbbell',  category: 'legs' },
+  { key: 'curl',                  name: '哑铃弯举',         group: '臂',   equipment: 'dumbbell',  category: 'arms' },
+  { key: 'ab_wheel',              name: '健腹轮',           group: '核心', equipment: 'bodyweight', category: 'core' },
+  { key: 'wide_goblet_squat',     name: '宽距高脚杯蹲',     group: '下肢', equipment: 'dumbbell',  category: 'legs' },
+  { key: 'sumo_squat',            name: '相扑蹲',           group: '下肢', equipment: 'dumbbell',  category: 'legs' },
+  { key: 'hip_thrust',            name: '臀桥',             group: '臀',   equipment: 'bench',     category: 'legs' },
+  { key: 'incline_db_bench',      name: '上斜卧推',         group: '胸',   equipment: 'bench',     category: 'push' },
+  { key: 'db_pullover',           name: '哑铃上拉',         group: '背',   equipment: 'bench',     category: 'pull' },
+  { key: 'triceps_ext',           name: '三头伸展',         group: '臂',   equipment: 'dumbbell',  category: 'arms' },
+  { key: 'weighted_plank',        name: '负重平板',         group: '核心', equipment: 'bodyweight', category: 'core' },
+];
+
+// 内置课表 A/B/C（镜像前端 PLANS；swap/superset 是前端展示逻辑不入库，
+// plan_items 只存 order 化的 {exerciseKey, sets, repsTarget}）
+const BUILTIN_PLANS = [
+  { key: 'A', name: '全身 A', items: [
+    { exerciseKey: 'goblet_squat', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'db_bench', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'db_row_bench', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'rdl', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'lateral_raise', sets: 2, repsTarget: 12 },
+    { exerciseKey: 'dead_bug', sets: 2, repsTarget: 12 },
+  ] },
+  { key: 'B', name: '全身 B', items: [
+    { exerciseKey: 'bulgarian_split_squat', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'half_kneel_press', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'bent_over_row', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'single_leg_rdl', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'curl', sets: 2, repsTarget: 12 },
+    { exerciseKey: 'ab_wheel', sets: 2, repsTarget: 12 },
+  ] },
+  { key: 'C', name: '全身 C', items: [
+    { exerciseKey: 'wide_goblet_squat', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'hip_thrust', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'incline_db_bench', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'db_pullover', sets: 3, repsTarget: 10 },
+    { exerciseKey: 'triceps_ext', sets: 2, repsTarget: 12 },
+    { exerciseKey: 'weighted_plank', sets: 2, repsTarget: 12 },
+  ] },
+];
+
+// superset 配对压成两个独立 plan_items（ord 交替）——入库形状只有平铺列表，配对关系由前端渲染时还原。
+// 注意字段名：BUILTIN_PLANS 的项是 {exerciseKey, sets, repsTarget}（与 plan_items 列名对齐），
+// 不是老前端 PLANS 常量的整动作对象形状
+function flattenPlanItems(exercises) {
+  const out = [];
+  for (const ex of exercises) {
+    out.push({ exerciseKey: ex.exerciseKey, sets: ex.sets, repsTarget: ex.repsTarget, ord: out.length });
+    if (ex.superset) out.push({ exerciseKey: ex.superset, sets: 2, repsTarget: 12, ord: out.length });
+  }
+  return out;
+}
+
+// 幂等种子：动作按 key upsert（只补缺失行，用户改过的 name/enabled 不动）；
+// 课表按 key 判存在（已存在整组跳过 —— 课表是种子整体，不做逐项合并）
+export function ensureBuiltinTraining(db) {
+  const insEx = db.prepare(`
+    INSERT INTO exercises (key, name_zh, equipment, category, gif_url, tips_json, source, enabled)
+    VALUES (@key, @name, @equipment, @category, NULL, NULL, 'builtin', 1)
+    ON CONFLICT(key) DO NOTHING
+  `);
+  const planCount = db.prepare('SELECT COUNT(*) AS n FROM workout_plans WHERE key = ?');
+  const insPlan = db.prepare(`INSERT INTO workout_plans (key, name, kind, goal, days_per_week, archived)
+    VALUES (?, ?, 'builtin', NULL, NULL, 0)`);
+  const insDay = db.prepare('INSERT INTO plan_days (plan_id, seq, label) VALUES (?, ?, ?)');
+  const insItem = db.prepare(`INSERT INTO plan_items (day_id, exercise_key, sets, reps_target, ord)
+    VALUES (?, ?, ?, ?, ?)`);
+
+  const run = db.transaction(() => {
+    let insertedEx = 0, insertedPlans = 0;
+    for (const ex of BUILTIN_EXERCISES) {
+      const r = insEx.run(ex);
+      insertedEx += r.changes;
+    }
+    for (const plan of BUILTIN_PLANS) {
+      if (planCount.get(plan.key).n > 0) continue;
+      const planId = insPlan.run(plan.key, plan.name).lastInsertRowid;
+      // A/B/C 各是单日课表（一天练完全身），seq=0 单行 label 用课表名
+      const dayId = insDay.run(planId, 0, plan.name).lastInsertRowid;
+      const items = flattenPlanItems(plan.items);
+      for (const it of items) insItem.run(dayId, it.exerciseKey, it.sets, it.repsTarget, it.ord);
+      insertedPlans += 1;
+    }
+    return { insertedEx, insertedPlans };
+  });
+  try {
+    const r = run();
+    if (r.insertedEx || r.insertedPlans) {
+      console.log('[seed] 训练种子迁移：补内置动作 ' + r.insertedEx + ' 个、内置课表 ' + r.insertedPlans + ' 套');
+    }
+    return r;
+  } catch (err) {
+    console.error('[seed] 训练种子迁移失败（动作库/课表可能不完整）：' + err.message);
+    return { insertedEx: 0, insertedPlans: 0 };
   }
 }

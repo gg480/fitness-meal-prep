@@ -128,6 +128,40 @@ function assertLogBody(body) {
   }
 }
 
+/* 08 轻断食状态归一化：{goal,lastMealTs,manual,endedTs}。
+ * goal 必填 12-24 整数；lastMealTs 必填正整数毫秒；manual 必须布尔；
+ * endedTs 可空（进行中态）——给值时必须是正整数毫秒且 ≥ lastMealTs（结束不可能早于开始）。
+ * undefined/null = 当日无断食记录（落 NULL，删除记录即回到这个态）。
+ * 结构非法一律 400：断食卡靠它倒推「已断食 Xh Ym」，脏值会显示出负时长 */
+function normalizeFastState(v) {
+  if (v === undefined || v === null) return null;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) {
+    throw new HttpError(400, 'fastState 必须为对象 {goal,lastMealTs,manual,endedTs}');
+  }
+  const goal = Number(v.goal);
+  if (!Number.isInteger(goal) || goal < 12 || goal > 24) {
+    throw new HttpError(400, 'fastState.goal 必须为 12–24 的整数');
+  }
+  const lastMealTs = Number(v.lastMealTs);
+  if (!Number.isInteger(lastMealTs) || lastMealTs <= 0) {
+    throw new HttpError(400, 'fastState.lastMealTs 必须为正整数毫秒时间戳');
+  }
+  if (typeof v.manual !== 'boolean') {
+    throw new HttpError(400, 'fastState.manual 必须为布尔（true=手动开始，false=首餐回推兜底）');
+  }
+  let endedTs = null;
+  if (v.endedTs !== undefined && v.endedTs !== null) {
+    endedTs = Number(v.endedTs);
+    if (!Number.isInteger(endedTs) || endedTs <= 0) {
+      throw new HttpError(400, 'fastState.endedTs 必须为正整数毫秒时间戳或 null');
+    }
+    if (endedTs < lastMealTs) {
+      throw new HttpError(400, 'fastState.endedTs 不能早于 lastMealTs');
+    }
+  }
+  return JSON.stringify({ goal, lastMealTs, manual: v.manual, endedTs });
+}
+
 // dayType 归一化（T-126）：缺省 / null / 空串 = 未登记（落 NULL），非空必须是三个枚举之一。
 // 「未登记」必须能与「登记为 none」区分开 —— 前者回退 settings.dayType，后者是用户当天的明确表态
 function normalizeDayType(v) {
@@ -159,6 +193,9 @@ const rowToLog = (row) => {
   // 不让一条坏 JSON 把整天的读路径带崩
   let outing = null;
   if (row.outing) { try { const o = JSON.parse(row.outing); if (o && typeof o === 'object') outing = o; } catch { outing = null; } }
+  // 08 轻断食状态：同 outing 口径 —— 解析不出对象一律落 null，坏 JSON 不带崩读路径
+  let fastState = null;
+  if (row.fast_state) { try { const f = JSON.parse(row.fast_state); if (f && typeof f === 'object' && !Array.isArray(f)) fastState = f; } catch { fastState = null; } }
   return {
     meals: row.meals, whey: row.whey,
     breakfast: parse(row.breakfast), late: parse(row.late),
@@ -170,6 +207,8 @@ const rowToLog = (row) => {
     dayType: row.day_type || null,
     // T-129 当日外食/喝酒记录：null = 未登记
     outing,
+    // 08 当日断食状态 {goal,lastMealTs,manual,endedTs}：null = 当日无断食记录
+    fastState,
   };
 };
 
@@ -191,15 +230,15 @@ router.put('/:date', wrap((req, res) => {
   // T-126 日类型登记随同一次 upsert 落库：与份数/加餐同一个动作里写，避免「登记成功但打卡失败」的半状态
   const dayType = normalizeDayType(body.dayType);
   db.prepare(`
-    INSERT INTO day_logs (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety, checked_in, day_type, outing)
-    VALUES (@date, @meals, @whey, @breakfast, @late, @consumed, @per_snap, @batch_name, @meals_log, @satiety, @checked_in, @day_type, @outing)
+    INSERT INTO day_logs (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety, checked_in, day_type, outing, fast_state)
+    VALUES (@date, @meals, @whey, @breakfast, @late, @consumed, @per_snap, @batch_name, @meals_log, @satiety, @checked_in, @day_type, @outing, @fast_state)
     ON CONFLICT(date) DO UPDATE SET
       meals = excluded.meals, whey = excluded.whey, breakfast = excluded.breakfast,
       late = excluded.late, consumed = excluded.consumed,
       per_snap = excluded.per_snap, batch_name = excluded.batch_name,
       meals_log = excluded.meals_log, satiety = excluded.satiety,
       checked_in = excluded.checked_in, day_type = excluded.day_type,
-      outing = excluded.outing
+      outing = excluded.outing, fast_state = excluded.fast_state
   `).run({
     date,
     // 落库前收到 0.1 网格上：校验只保证"最多 1 位小数"，客户端仍可能传来 1.2000000000000002 式浮点残渣
@@ -217,6 +256,8 @@ router.put('/:date', wrap((req, res) => {
     day_type: dayType,
     // T-129：缺省 / null = 未登记落 NULL（删除记录即回到这个态），给了则归一化后落 JSON 文本
     outing: normalizeOuting(body.outing),
+    // 08：缺省 / null = 当日无断食记录落 NULL；给了则归一化后落 JSON 文本
+    fast_state: normalizeFastState(body.fastState),
   });
   res.json({ code: 0, data: { date, ...rowToLog(db.prepare('SELECT * FROM day_logs WHERE date = ?').get(date)) } });
 }));

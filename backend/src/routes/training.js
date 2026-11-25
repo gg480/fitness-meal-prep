@@ -10,7 +10,8 @@ const router = Router();
  * 只存力量课：Zone2 有氧仍走 cardio_logs，活动量双环各自取数，天然不双计。 */
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PLAN_KEYS = ['A', 'B', 'C'];
+// 07：planKey 合法域放宽为 workout_plans.key 全集（builtin A/B/C 由种子迁移写入 + 用户自建 P1/P2…），
+// 不再是写死的 ['A','B','C'] 常量 —— 校验时查库，见 assertWorkoutBody
 // 阻力修饰符：哑铃到顶后的进阶手段（弹力带 / 停顿 / 慢速离心 / 单侧），与 SPEC 7.2 逐值一致
 const LOAD_TAGS = ['band', 'pause', 'slow', 'unilateral'];
 const MAX_REPS = 100;    // SPEC 7.4：单组次数 1–100
@@ -64,7 +65,11 @@ function assertWorkoutBody(body) {
   if (!DATE_RE.test(body.date || '')) throw new HttpError(400, 'date 格式应为 YYYY-MM-DD');
   // 训练是"已发生"的事实记录：未来日期会让轮换指针与回归期推导一起跑偏，故直接拒收
   if (body.date > todayKey()) throw new HttpError(400, 'date 不能晚于今天');
-  if (!PLAN_KEYS.includes(body.planKey)) throw new HttpError(400, 'planKey 只允许 A/B/C');
+  // 07：planKey 合法域 = workout_plans.key 全集（种子已写入 A/B/C，用户自建课表 P1/P2… 也在查库范围内）；
+  // 查库而非写死枚举，训练日志才能挂到用户自建课表上。'D' 这类不存在的 key 依旧 400
+  if (!body.planKey || !db.prepare('SELECT 1 FROM workout_plans WHERE key = ?').get(body.planKey)) {
+    throw new HttpError(400, 'planKey 不存在（须为课表库中的 key，如 A/B/C 或 P1…）');
+  }
   const slot = body.slot === undefined || body.slot === null || body.slot === '' ? null : body.slot;
   if (slot !== null && !TRAIN_SLOT_KEYS.includes(slot)) {
     throw new HttpError(400, 'slot 只允许 ' + TRAIN_SLOT_KEYS.join('/'));

@@ -25,6 +25,15 @@ function parseOuting(raw) {
   } catch { return null; }
 }
 
+// 08 轻断食状态：同 parseOuting 口径 —— 解析不出对象落 null，坏值不带崩整份备份
+function parseFastState(raw) {
+  if (!raw) return null;
+  try {
+    const f = JSON.parse(raw);
+    return f && typeof f === 'object' && !Array.isArray(f) ? f : null;
+  } catch { return null; }
+}
+
 function exportData() {
   return {
     foods: db.prepare('SELECT * FROM foods ORDER BY rowid').all(),
@@ -49,10 +58,16 @@ function exportData() {
           dayType: r.day_type || null,
           // T-129 外食/喝酒记录：丢了会让「已登记的外食」在恢复后消失，当天摄入与各餐修正一起回落
           outing: parseOuting(r.outing),
+          // 08 轻断食状态 {goal,lastMealTs,manual,endedTs}：丢了会让进行中的断食在恢复后消失、
+          // 已结束的断食时长丢失——与 outing/rhr 同哲学原样导出
+          fastState: parseFastState(r.fast_state),
           // v3.2 晨脉：null = 当天没量，必须原样导出（丢了会让「没量」在恢复后变成有值）——与 rhr 立约一致
           rhr: r.rhr ?? null }])
     ),
-    weights: db.prepare('SELECT date, kg FROM weights ORDER BY date ASC').all(),
+    // 06 独立体重页：body_fat 可空（NULL=当日没量体脂），必须原样导出（丢了会把「没量」变「有值」）
+    weights: db.prepare('SELECT date, kg, body_fat FROM weights ORDER BY date ASC').all(),
+    // 06 独立体重页：围度六部位记录（waist/hip/大臂左右/大腿左右），完整趋势全量导出
+    measurements: db.prepare('SELECT id, date, part, value, created_at FROM measurements ORDER BY date ASC, id ASC').all(),
     // T-114 有氧记录：导出成与 GET /api/cardio 一致的 camelCase；kcal 是派生值不入库也不入备份
     cardio_logs: db.prepare('SELECT * FROM cardio_logs ORDER BY date ASC, id ASC').all()
       .map((r) => ({
@@ -74,13 +89,21 @@ function exportData() {
         weight: r.weight, loadTag: r.load_tag, rir: r.rir, toFailure: r.to_failure,
         bodyweightKg: r.bodyweight_kg, createdAt: r.created_at,
       })),
+    // 07 训练升级：动作库/课表库/排课表（plan_days/plan_items 是课表库的行，plan_schedule 是周历）。
+    // 漏了会让动作库与自建课表在恢复后变空、训练日志的 plan_key 外键悬空
+    exercises: db.prepare('SELECT * FROM exercises ORDER BY key ASC').all(),
+    workout_plans: db.prepare('SELECT * FROM workout_plans ORDER BY key ASC').all(),
+    plan_days: db.prepare('SELECT * FROM plan_days ORDER BY plan_id ASC, seq ASC').all(),
+    plan_items: db.prepare('SELECT * FROM plan_items ORDER BY day_id ASC, ord ASC').all(),
+    plan_schedule: db.prepare('SELECT * FROM plan_schedule ORDER BY date ASC').all(),
     // T-133 外食菜品库：导出成与 GET /api/eatery-dishes 同形的 camelCase 对象（而非库列名），
     // 与其他表同口径；缺了会让外食弹层在恢复后变空
     eatery_dishes: db.prepare('SELECT * FROM eatery_dishes ORDER BY id').all()
       .map((r) => ({ id: r.id, name: r.name, eatery: r.eatery, slot: r.slot,
         kcal: r.kcal, p: r.p, c: r.c, f: r.f, createdAt: r.created_at })),
     // 备份格式版本（SPEC 7.9）：旧备份无此键 = 导入时按「缺表跳过、缺列补默认」兼容
-    schema_version: 3,
+    // 07：3→4（新增 exercises/workout_plans/plan_days/plan_items/plan_schedule 五表）
+    schema_version: 4,
     __exportedAt: new Date().toISOString(),
   };
 }
@@ -108,8 +131,11 @@ const BACKUP_COLUMNS = {
   settings: ['key', 'value'],
   inventory: ['id', 'name', 'portions', 'in_at', 'per_kcal', 'per_p', 'per_c', 'per_f', 'items', 'meal_allocation'],
   day_logs: ['date', 'meals', 'whey', 'breakfast', 'late', 'consumed', 'per_snap',
-    'batch_name', 'meals_log', 'satiety', 'checked_in', 'day_type', 'outing', 'rhr'],
-  weights: ['date', 'kg'],
+    'batch_name', 'meals_log', 'satiety', 'checked_in', 'day_type', 'outing', 'fast_state', 'rhr'],
+  // 06 独立体重页：body_fat 可空，漏了会把「没量体脂」在导入后变成「没这列」
+  weights: ['date', 'kg', 'body_fat'],
+  // 06 独立体重页：围度六部位（waist/hip/大臂左右/大腿左右），四列全量
+  measurements: ['id', 'date', 'part', 'value', 'created_at'],
   cardio_logs: ['id', 'date', 'minutes', 'hr', 'form', 'created_at'],
   rule_state: ['id', 'ignored', 'history'],
   // v3.0 训练两表（SPEC 7.9）：workout_sets 的 workout_id 是外键，导入必须先重灌 workout_logs
@@ -118,6 +144,14 @@ const BACKUP_COLUMNS = {
     'load_tag', 'rir', 'to_failure', 'bodyweight_kg', 'created_at'],
   // T-133 外食菜品库：九列全量进白名单，漏了会让外食弹层在"导出→导入"后变空
   eatery_dishes: ['id', 'name', 'eatery', 'slot', 'kcal', 'p', 'c', 'f', 'created_at'],
+  // 07 训练升级：动作库/课表库/排课表。exercises 是动作库持久层（builtin 19 行种子+custom），
+  // workout_plans.key 是训练日志 plan_key 外键的合法域，plan_schedule 是周历排课表 —— 漏了
+  // 任何一张，恢复后要么动作库变空要么排课全丢、训练日志外键悬空
+  exercises: ['id', 'key', 'name_zh', 'name_en', 'equipment', 'category', 'gif_url', 'tips_json', 'source', 'enabled', 'created_at'],
+  workout_plans: ['id', 'key', 'name', 'kind', 'goal', 'days_per_week', 'archived', 'created_at'],
+  plan_days: ['id', 'plan_id', 'seq', 'label'],
+  plan_items: ['id', 'day_id', 'exercise_key', 'sets', 'reps_target', 'ord'],
+  plan_schedule: ['date', 'plan_key', 'day_id', 'rest'],
 };
 
 /* 启动自检：真实表结构里出现白名单之外的列，说明有人加了字段却忘了进备份，导入导出会丢它。
@@ -192,8 +226,8 @@ function writeInventory(data) {
 
 function writeDayLogs(data) {
   const ins = db.prepare(`INSERT INTO day_logs
-    (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety, checked_in, day_type, outing, rhr)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (date, meals, whey, breakfast, late, consumed, per_snap, batch_name, meals_log, satiety, checked_in, day_type, outing, fast_state, rhr)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   for (const [date, log] of Object.entries(data.day_logs)) {
     // 快照/事件流兼容三种来源：v2.2 备份（原文本）、手工编辑（对象）、旧备份（缺键）
     const snap = log.perSnap == null ? null
@@ -206,16 +240,30 @@ function writeDayLogs(data) {
     // outing（T-129）同源：旧备份缺键时落 NULL = 未登记；漏写会让外食记录与各餐修正一起丢失
     const outing = log.outing == null ? null
       : (typeof log.outing === 'string' ? log.outing : JSON.stringify(log.outing));
+    // fast_state（08 轻断食）同源：旧备份缺键落 NULL = 当日无断食记录；漏写会让进行中的
+    // 断食在恢复后消失、已结束的断食时长丢失
+    const fastState = log.fastState == null ? null
+      : (typeof log.fastState === 'string' ? log.fastState : JSON.stringify(log.fastState));
     ins.run(date, log.meals, log.whey, log.breakfast, log.late, log.consumed,
-      snap, log.batchName || '', mlog, log.satiety || 0, resolveCheckedIn(log), log.dayType || null, outing,
+      snap, log.batchName || '', mlog, log.satiety || 0, resolveCheckedIn(log), log.dayType || null, outing, fastState,
       // rhr（v3.2 晨脉）：旧备份缺键落 NULL = 当天没量，与列默认态同口径（SPEC 7.9「缺列补默认」）
       log.rhr ?? null);
   }
 }
 
 function writeWeights(data) {
-  const ins = db.prepare('INSERT INTO weights (date, kg) VALUES (?, ?)');
-  for (const w of data.weights) ins.run(w.date, w.kg);
+  // 06 独立体重页：body_fat 可空 —— 旧备份缺键落 NULL = 当天没量体脂（SPEC 7.9「缺列补默认」口径）
+  const ins = db.prepare('INSERT INTO weights (date, kg, body_fat) VALUES (?, ?, ?)');
+  for (const w of data.weights) ins.run(w.date, w.kg, w.body_fat ?? null);
+}
+
+function writeMeasurements(data) {
+  // 06 独立体重页：围度记录原样重灌（id 保留，趋势顺序不变）；旧备份无此表整组跳过（touchedTables 过滤）
+  const ins = db.prepare(`INSERT INTO measurements (id, date, part, value, created_at)
+    VALUES (@id, @date, @part, @value, @createdAt)`);
+  for (const m of data.measurements) {
+    ins.run({ id: m.id, date: m.date, part: m.part, value: m.value, createdAt: m.createdAt || '' });
+  }
 }
 
 function writeCardioLogs(data) {
@@ -275,6 +323,63 @@ function writeEateryDishes(data) {
   }
 }
 
+/* ===== 07 训练升级：动作库 / 课表库 / 排课表（五表一体，外键链 exercises←无 / plan_days→plan /
+   plan_items→days / plan_schedule→plans.key，重灌顺序见 importWriters） ===== */
+
+function writeExercises(data) {
+  const ins = db.prepare(`INSERT INTO exercises
+    (id, key, name_zh, name_en, equipment, category, gif_url, tips_json, source, enabled, created_at)
+    VALUES (@id, @key, @nameZh, @nameEn, @equipment, @category, @gifUrl, @tipsJson, @source, @enabled, @createdAt)`);
+  for (const e of data.exercises) {
+    // 缺列补默认（SPEC 7.9）：equipment/category 落 'other'、enabled 落 1、可空文本落 NULL
+    ins.run({
+      id: e.id, key: e.key, nameZh: e.nameZh || e.name_zh || '', nameEn: e.nameEn ?? e.name_en ?? null,
+      equipment: e.equipment || 'other', category: e.category || 'other',
+      gifUrl: e.gifUrl ?? e.gif_url ?? null, tipsJson: e.tipsJson ?? e.tips_json ?? null,
+      source: e.source || 'custom', enabled: e.enabled ?? 1, createdAt: e.createdAt || e.created_at || '',
+    });
+  }
+}
+
+function writeWorkoutPlans(data) {
+  const ins = db.prepare(`INSERT INTO workout_plans
+    (id, key, name, kind, goal, days_per_week, archived, created_at)
+    VALUES (@id, @key, @name, @kind, @goal, @daysPerWeek, @archived, @createdAt)`);
+  for (const p of data.workout_plans) {
+    ins.run({
+      id: p.id, key: p.key, name: p.name, kind: p.kind || 'user',
+      goal: p.goal ?? null, daysPerWeek: p.daysPerWeek ?? p.days_per_week ?? null,
+      archived: p.archived ?? 0, createdAt: p.createdAt || p.created_at || '',
+    });
+  }
+}
+
+function writePlanDays(data) {
+  const ins = db.prepare('INSERT INTO plan_days (id, plan_id, seq, label) VALUES (@id, @planId, @seq, @label)');
+  for (const d of data.plan_days) {
+    ins.run({ id: d.id, planId: d.planId ?? d.plan_id, seq: d.seq ?? 0, label: d.label || '' });
+  }
+}
+
+function writePlanItems(data) {
+  const ins = db.prepare(`INSERT INTO plan_items
+    (id, day_id, exercise_key, sets, reps_target, ord)
+    VALUES (@id, @dayId, @exerciseKey, @sets, @repsTarget, @ord)`);
+  for (const it of data.plan_items) {
+    ins.run({
+      id: it.id, dayId: it.dayId ?? it.day_id, exerciseKey: it.exerciseKey || it.exercise_key,
+      sets: it.sets ?? 3, repsTarget: it.repsTarget || it.reps_target || '10', ord: it.ord ?? 0,
+    });
+  }
+}
+
+function writePlanSchedule(data) {
+  const ins = db.prepare('INSERT INTO plan_schedule (date, plan_key, day_id, rest) VALUES (@date, @planKey, @dayId, @rest)');
+  for (const s of data.plan_schedule) {
+    ins.run({ date: s.date, planKey: s.planKey || s.plan_key, dayId: s.dayId ?? s.day_id ?? null, rest: s.rest ?? 0 });
+  }
+}
+
 /* 表名 → 写入器。键域即 BACKUP_COLUMNS 的表名，导入时的 DELETE 表名也取自这里（非用户输入） */
 function importWriters(data) {
   return {
@@ -284,8 +389,19 @@ function importWriters(data) {
     inventory: () => writeInventory(data),
     day_logs: () => writeDayLogs(data),
     weights: () => writeWeights(data),
+    // 06 独立体重页：围度无外键依赖，重灌顺序不敏感；旧备份缺 measurements 键时整组跳过
+    measurements: () => writeMeasurements(data),
     cardio_logs: () => writeCardioLogs(data),
     rule_state: () => writeRuleState(data),
+    // 07 训练升级五表：外键链 workout_logs.plan_key→workout_plans.key、plan_days→workout_plans(id)、
+    // plan_items→plan_days(id)。重灌顺序必须 exercises→workout_plans→plan_days→plan_items→
+    // plan_schedule 全部排在 workout_logs 之前（workout_logs.plan_key 引用 workout_plans.key，
+    // 否则外键约束失败）。旧备份无这些键时整组跳过（touchedTables 按 data[key]!==undefined 过滤）
+    exercises: () => writeExercises(data),
+    workout_plans: () => writeWorkoutPlans(data),
+    plan_days: () => writePlanDays(data),
+    plan_items: () => writePlanItems(data),
+    plan_schedule: () => writePlanSchedule(data),
     // 顺序敏感：workout_sets 的 workout_id 外键指向 workout_logs，必须前者先重灌。
     // 旧备份无 workout_logs 键时整组跳过（touchedTables 按 data[key] !== undefined 过滤），
     // 即"缺表跳过"，符合 SPEC 7.9 的旧备份兼容
@@ -307,9 +423,14 @@ router.post('/', wrap((req, res) => {
   if (touchedTables.length === 0) throw new HttpError(400, '文件中没有可识别的备份数据');
 
   const run = db.transaction(() => {
-    for (const key of touchedTables) {
+    // 两阶段重灌：先按「子表在前」逆序清空全部触达表，再按「父表在前」正序重灌——
+    // 交错「删一张灌一张」会撞外键（restore 时 plan_schedule 还引用着 workout_plans，
+    // 轮到 DELETE workout_plans 就失败）。writers 键序=父表在前，逆序即子表在前
+    for (const key of [...touchedTables].reverse()) {
       // 表名来自 writers 的代码内白名单（非用户输入），拼接无注入风险
       db.prepare(`DELETE FROM ${key}`).run();
+    }
+    for (const key of touchedTables) {
       writers[key]();
     }
   });
